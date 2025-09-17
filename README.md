@@ -8,7 +8,7 @@
 
 ## Why Q-Cap?
 
-* **Confidentiality-by-default**: Envelope encryption per file with modern AEAD.
+* **Confidentiality-by-default**: Envelope encryption per file with modern Authentication Encryption with Associated Data (AEAD).
 * **Least-privilege sharing**: Capability tokens (macaroons) with caveats (expiry, paths, audience).
 * **Integrity & provenance**: BLAKE3 Merkle tree; signed manifest.
 * **Portable**: Single-file `.qcap` artifact; easy to mirror/cdn.
