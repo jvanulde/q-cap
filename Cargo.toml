@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "core/qcap-core",
+  "core/qcap-cli"
+]
+resolver = "2"

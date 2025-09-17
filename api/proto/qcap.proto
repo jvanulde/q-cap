@@ -1,0 +1,5 @@
+syntax = "proto3";
+package qcap.v1;
+
+message HealthReply { string status = 1; }
+// (Note: add google/protobuf/empty.proto import and service later)
