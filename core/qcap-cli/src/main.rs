@@ -88,6 +88,8 @@ enum Commands {
         identity: PathBuf,
         #[arg(long = "revocations")]
         revocations: Option<PathBuf>,
+        #[arg(long = "revocations-url", conflicts_with = "revocations")]
+        revocations_url: Option<String>,
         #[arg(short = 'o', long = "out")]
         out: PathBuf,
     },
@@ -110,9 +112,27 @@ enum Commands {
         #[arg(long = "token", env = "QCAP_REGISTRY_TOKEN")]
         token: Option<String>,
     },
+    /// Publish a signed revocations.json to a registry issuer endpoint
+    PublishRevocations {
+        file: PathBuf,
+        #[arg(long = "issuer")]
+        issuer: Option<String>,
+        #[arg(long = "registry", default_value = "http://127.0.0.1:8080")]
+        registry: String,
+        #[arg(long = "token", env = "QCAP_REGISTRY_TOKEN")]
+        token: Option<String>,
+    },
     /// Fetch a .qcap from a registry
     Fetch {
         artifact: String,
+        #[arg(short = 'o', long = "out")]
+        out: PathBuf,
+        #[arg(long = "registry", default_value = "http://127.0.0.1:8080")]
+        registry: String,
+    },
+    /// Fetch a signed revocations.json from a registry issuer endpoint
+    FetchRevocations {
+        issuer: String,
         #[arg(short = 'o', long = "out")]
         out: PathBuf,
         #[arg(long = "registry", default_value = "http://127.0.0.1:8080")]
@@ -192,8 +212,16 @@ fn run() -> Result<()> {
             cap,
             identity,
             revocations,
+            revocations_url,
             out,
-        } => open_archive(&file, &cap, &identity, revocations.as_deref(), &out)?,
+        } => open_archive(
+            &file,
+            &cap,
+            &identity,
+            revocations.as_deref(),
+            revocations_url.as_deref(),
+            &out,
+        )?,
         Commands::Revoke {
             cap,
             issuer,
@@ -205,11 +233,22 @@ fn run() -> Result<()> {
             registry,
             token,
         } => publish(&file, &registry, token.as_deref())?,
+        Commands::PublishRevocations {
+            file,
+            issuer,
+            registry,
+            token,
+        } => publish_revocations(&file, issuer.as_deref(), &registry, token.as_deref())?,
         Commands::Fetch {
             artifact,
             out,
             registry,
         } => fetch(&artifact, &out, &registry)?,
+        Commands::FetchRevocations {
+            issuer,
+            out,
+            registry,
+        } => fetch_revocations(&issuer, &out, &registry)?,
         Commands::SampleGeopackage { out } => sample_geopackage(&out)?,
     }
     Ok(())
@@ -436,14 +475,14 @@ fn open_archive(
     cap_path: &Path,
     identity_path: &Path,
     revocations_path: Option<&Path>,
+    revocations_url: Option<&str>,
     out: &Path,
 ) -> Result<()> {
     let report = verify_archive(file)?;
     let identity: Identity = read_json(identity_path)?;
     let cap: CapabilityToken = read_json(cap_path)?;
     cap.verify()?;
-    if let Some(path) = revocations_path {
-        let revocations: RevocationList = read_json(path)?;
+    if let Some(revocations) = load_revocations(revocations_path, revocations_url)? {
         revocations.verify()?;
         if revocations.revokes(&cap) {
             return Err("capability has been revoked".into());
@@ -637,6 +676,74 @@ fn fetch(artifact: &str, out: &Path, registry: &str) -> Result<()> {
     Ok(())
 }
 
+fn publish_revocations(
+    file: &Path,
+    issuer: Option<&str>,
+    registry: &str,
+    token: Option<&str>,
+) -> Result<()> {
+    let revocations: RevocationList = read_json(file)?;
+    revocations.verify()?;
+    let issuer = issuer
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| revocations.public_key.clone());
+    let url = revocations_url(registry, &issuer);
+    let bytes = fs::read(file)?;
+    let mut request = ureq::post(&url).set("Content-Type", "application/qcap-revocations+json");
+    if let Some(token) = token.filter(|value| !value.is_empty()) {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response: RevocationResponse = request.send_bytes(&bytes)?.into_json()?;
+    println!(
+        "Published revocations\n- issuer: {}\n- url: {}{}",
+        response.issuer,
+        registry.trim_end_matches('/'),
+        response.path
+    );
+    Ok(())
+}
+
+fn fetch_revocations(issuer: &str, out: &Path, registry: &str) -> Result<()> {
+    let url = revocations_url(registry, issuer);
+    let revocations = fetch_revocations_from_url(&url)?;
+    write_json(out, &revocations)?;
+    println!(
+        "Fetched revocations\n- issuer: {}\n- out: {}",
+        issuer,
+        out.display()
+    );
+    Ok(())
+}
+
+fn load_revocations(
+    revocations_path: Option<&Path>,
+    revocations_url: Option<&str>,
+) -> Result<Option<RevocationList>> {
+    match (revocations_path, revocations_url) {
+        (Some(path), None) => Ok(Some(read_json(path)?)),
+        (None, Some(url)) => Ok(Some(fetch_revocations_from_url(url)?)),
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err("use either --revocations or --revocations-url, not both".into()),
+    }
+}
+
+fn fetch_revocations_from_url(url: &str) -> Result<RevocationList> {
+    let response = ureq::get(url).call()?;
+    let revocations: RevocationList = response.into_json()?;
+    revocations.verify()?;
+    Ok(revocations)
+}
+
+fn revocations_url(registry: &str, issuer: &str) -> String {
+    let issuer = issuer.trim().trim_matches('/');
+    format!(
+        "{}/revocations/{}/revocations.json",
+        registry.trim_end_matches('/'),
+        issuer
+    )
+}
+
 fn sample_geopackage(out: &Path) -> Result<()> {
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
@@ -766,6 +873,12 @@ fn geopackage_point_blob(x: f64, y: f64) -> Vec<u8> {
 #[derive(Deserialize)]
 struct PublishResponse {
     name: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct RevocationResponse {
+    issuer: String,
     path: String,
 }
 

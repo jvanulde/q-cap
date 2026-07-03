@@ -68,6 +68,8 @@ try {
   Step "creating issuer and recipient identities"
   Run $QcapExe @("init", "--name", "issuer", "--out", $Issuer)
   Run $QcapExe @("init", "--name", "recipient", "--out", $Recipient)
+  $issuerIdentity = Get-Content -Raw $Issuer | ConvertFrom-Json
+  $issuerRevocationsUrl = "http://127.0.0.1:8080/revocations/$($issuerIdentity.signing_public_key)/revocations.json"
   $recipientIdentity = Get-Content -Raw $Recipient | ConvertFrom-Json
   $recipientAudience = $recipientIdentity.signing_public_key.Substring(0, 16)
 
@@ -121,7 +123,8 @@ try {
 
   Step "revoking capability and proving it is blocked"
   Run $QcapExe @("revoke", "--cap", $Cap, "--issuer", $Issuer, "--reason", "demo-complete", "--out", $Revocations)
-  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--revocations", $Revocations, "--out", $RevokedExported) "OK blocked revoked capability"
+  Run $QcapExe @("publish-revocations", $Revocations, "--registry", "http://127.0.0.1:8080", "--token", "demo-token")
+  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--revocations-url", $issuerRevocationsUrl, "--out", $RevokedExported) "OK blocked revoked capability"
 
   Step "MVP demo complete"
   Write-Host "Allowed output: $(Join-Path $Exported "reports\summary.txt")"

@@ -25,6 +25,15 @@ type Capsule struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type RevocationDocument struct {
+	Issuer      string `json:"issuer"`
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	Digest      string `json:"digest"`
+	CreatedAt   string `json:"created_at"`
+}
+
 type Registry struct {
 	StoreDir  string
 	IndexPath string
@@ -64,6 +73,7 @@ func main() {
 	mux.HandleFunc("/index", reg.indexHTML)
 	mux.HandleFunc("/artifacts", reg.publish)
 	mux.HandleFunc("/artifacts/", reg.artifact)
+	mux.HandleFunc("/revocations/", reg.revocations)
 
 	addr := ":8080"
 	log.Printf("registry listening on %s; store dir: %s; index: %s", addr, storeDir, indexPath)
@@ -174,6 +184,7 @@ func (r *Registry) root(w http.ResponseWriter, _ *http.Request) {
 			<li><a href="/index.json">/index.json</a> (JSON index)</li>
 			<li><a href="/index">/index</a> (HTML index)</li>
 			<li><a href="/artifacts/">/artifacts/</a> (downloads)</li>
+			<li><code>/revocations/&lt;issuer&gt;/revocations.json</code> (signed revocation lists)</li>
 		</ul>
 	</body></html>`))
 }
@@ -184,6 +195,7 @@ func (r *Registry) health(w http.ResponseWriter, _ *http.Request) {
 		"status":        "ok",
 		"auth_required": r.Token != "",
 		"artifacts":     len(r.Index),
+		"revocations":   r.revocationIssuerCount(),
 	})
 }
 
@@ -290,6 +302,72 @@ func (r *Registry) artifact(w http.ResponseWriter, req *http.Request) {
 	http.ServeFile(w, req, filepath.Join(r.StoreDir, name))
 }
 
+func (r *Registry) revocations(w http.ResponseWriter, req *http.Request) {
+	issuer := revocationIssuerFromPath(req.URL.Path)
+	if issuer == "" {
+		http.NotFound(w, req)
+		return
+	}
+
+	switch req.Method {
+	case http.MethodGet:
+		r.serveRevocations(w, req, issuer)
+	case http.MethodPost:
+		r.publishRevocations(w, req, issuer)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (r *Registry) serveRevocations(w http.ResponseWriter, req *http.Request, issuer string) {
+	path := r.revocationPath(issuer)
+	w.Header().Set("Content-Type", "application/qcap-revocations+json")
+	http.ServeFile(w, req, path)
+}
+
+func (r *Registry) publishRevocations(w http.ResponseWriter, req *http.Request, issuer string) {
+	if !r.authorized(req) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	dest := r.revocationPath(issuer)
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	written, copyErr := io.Copy(out, http.MaxBytesReader(w, req.Body, 10<<20))
+	closeErr := out.Close()
+	if copyErr != nil {
+		http.Error(w, copyErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if closeErr != nil {
+		http.Error(w, closeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	digest, err := fileDigest(dest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	doc := RevocationDocument{
+		Issuer:      issuer,
+		Path:        "/revocations/" + issuer + "/revocations.json",
+		Size:        written,
+		ContentType: "application/qcap-revocations+json",
+		Digest:      digest,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
 func (r *Registry) authorized(req *http.Request) bool {
 	if r.Token == "" {
 		return true
@@ -297,11 +375,51 @@ func (r *Registry) authorized(req *http.Request) bool {
 	return req.Header.Get("Authorization") == "Bearer "+r.Token
 }
 
+func (r *Registry) revocationPath(issuer string) string {
+	return filepath.Join(r.StoreDir, "revocations", issuer, "revocations.json")
+}
+
+func (r *Registry) revocationIssuerCount() int {
+	root := filepath.Join(r.StoreDir, "revocations")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			count++
+		}
+	}
+	return count
+}
+
+func revocationIssuerFromPath(path string) string {
+	raw := strings.TrimPrefix(path, "/revocations/")
+	raw = strings.TrimSuffix(raw, "/revocations.json")
+	raw = strings.Trim(raw, "/")
+	if raw == "" || strings.Contains(raw, "/") {
+		return ""
+	}
+	return safePathSegment(raw)
+}
+
 func safeArtifactName(raw string) string {
 	name := filepath.Base(strings.TrimSpace(raw))
 	name = strings.ReplaceAll(name, "\\", "_")
 	name = strings.ReplaceAll(name, "/", "_")
 	if name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return name
+}
+
+func safePathSegment(raw string) string {
+	name := strings.TrimSpace(raw)
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "..", "_")
+	if name == "." || name == "" {
 		return ""
 	}
 	return name
