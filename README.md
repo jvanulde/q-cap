@@ -2,7 +2,7 @@
 
 *Q-Cap* (Capability-based, encryptable content packages) is a packaging and distribution format that lets you **publish data openly** while keeping access **cryptographically controlled** by capabilities. Think: `.qcap` files that travel and sync like regular artifacts, but decrypt only for holders of the right capability tokens.
 
-> Status: **alpha scaffold** — this repository currently includes a Rust core library and CLI demo, a minimal Go registry service, and a TypeScript SDK stub. The full MVP (pack/seal/open/verify/capabilities/registry) is being built in milestones.
+> Status: **working local MVP** - this repository includes a Rust core library and CLI, a minimal Go registry service, and a TypeScript SDK stub. The core MVP flow is implemented locally: create identities, seal encrypted `.qcap` artifacts, verify them, publish/fetch through the dev registry, grant path-scoped capabilities, open authorized payloads, and block revoked capabilities.
 
 ---
 
@@ -21,10 +21,10 @@
 ```
 q-cap/
   core/
-    qcap-core/       # Rust library (crypto & format building blocks)
-    qcap-cli/        # Rust CLI (demo cmd available today)
+    qcap-core/       # Rust library (crypto and format building blocks)
+    qcap-cli/        # Rust CLI for init, pack, seal, verify, inspect, grant, open, revoke, publish/fetch
   services/
-    qcap-registry/   # Go minimal registry (health check endpoint)
+    qcap-registry/   # Go dev registry for health, artifact index/download, publish, and revocations
   sdks/
     ts/              # TypeScript SDK stub
   api/
@@ -150,16 +150,16 @@ cd q-cap
 cargo build --workspace
 ```
 
-### Quick demo (CLI)
+### Quick smoke test (CLI)
 
-The demo subcommand just computes a BLAKE3 “root” over input bytes:
+The hash subcommand is a lightweight smoke test for the CLI and core crate:
 
 ```bash
 cargo run -p qcap-cli -- hash "hello world"
 # -> blake3:7d8d... (hash will vary)
 ```
 
-### MVP demo: sealed package, capability, registry
+### MVP demo: sealed package, capability, registry, revocation
 
 The current MVP demonstrates the core Q-Cap flow locally:
 
@@ -236,29 +236,35 @@ npm run build
 
 ---
 
-## Roadmap to MVP
+## MVP status and remaining hardening
 
-Planned commands and features (tracked in GitHub Issues):
+Implemented in the local MVP:
 
-* `qcap init` — local MVP identity/key material, fingerprint printout
-* `qcap pack` — create `.qcap` archive with `manifest.json`, `payload/`, `meta/`
-* `qcap seal` — per-file XChaCha20-Poly1305 envelope encryption, recipients
-* `qcap open` — verify + decrypt with capability; caveats enforced
-* `qcap grant` — mint macaroons with caveats (expiry, audience, paths)
-* `qcap revoke` — soft revocation with signed `revocations.json`
-* `qcap inspect` — summarize manifest, recipients, Merkle root
-* `qcap publish` / `qcap fetch` — push/pull via registry (S3/MinIO)
+* `qcap init` - local MVP identity/key material and recipient fingerprint.
+* `qcap pack` - plaintext `.qcap` archive with `manifest.json`, `payload/`, `meta/`, and detached signature.
+* `qcap seal` - per-file XChaCha20-Poly1305 envelope encryption with recipient wrapping.
+* `qcap verify` - manifest/signature/Merkle verification.
+* `qcap inspect` - manifest, recipients, Merkle root, encryption state, and payload summary.
+* `qcap grant` - signed capability tokens with expiry, audience, and path caveats.
+* `qcap open` - verify + decrypt/export only authorized payload paths.
+* `qcap revoke` - signed soft revocation lists.
+* `qcap publish` / `qcap fetch` - push/pull through the dev registry.
+* `qcap publish-revocations` / `qcap fetch-revocations` - registry-backed revocation distribution.
 
-*Server side*:
+Before calling this a solid MVP release:
 
-* REST/gRPC endpoints with OpenAPI, Postgres manifest index, Redis cache
-* OIDC admin auth; PAT for automation
-* Observability: OpenTelemetry traces/metrics; structured logs
+* Keep the sealed demo as the canonical acceptance test and run it in CI where practical.
+* Add integration tests for publish/fetch, capability denial, path filtering, and revoked-token denial.
+* Document the CLI output contract well enough for SDKs and automation to rely on it.
+* Remove generated binaries and cache artifacts from commits; keep the repo source-only.
+* Make security limits explicit: local identity JSON files are development-only, revocation is soft, and registry auth is token-based.
+* Decide whether the TypeScript SDK remains a stub for MVP or must support inspect/verify before release.
 
-SDKs:
+Post-MVP roadmap:
 
-* **TypeScript (WASM)**: open/inspect/verify in browser/Node
-* **Python (cffi)**: data-pipeline friendly verify/open
+* Production registry: REST/gRPC endpoints with OpenAPI, Postgres manifest index, Redis cache, durable object storage, OIDC admin auth, PAT automation, and observability.
+* SDKs: TypeScript/WASM open/inspect/verify in browser/Node and Python/cffi verify/open for data pipelines.
+* Hardening: Argon2id-protected keyfiles, KMS/HSM-backed issuer roots, key rotation docs, SBOM/image scanning/signed releases, and optional transparency log.
 
 ---
 
@@ -350,69 +356,21 @@ curl http://localhost:8080/index.json | jq .
 
 ---
 
-## MVP Quick Start: Pack, Verify, Inspect, Grant, Open
+## Plain pack mode
 
-Prerequisites:
-
-* Rust (cargo) installed
-* macOS/Linux shell (commands below use zsh/bash)
-
-Step 1 — Build the workspace:
+The canonical MVP path is the sealed demo above. `qcap pack` is still useful for plaintext archive and signature experiments:
 
 ```bash
 cargo build --workspace
+mkdir -p /tmp/qcap-demo/plain-payload
+echo "hello" > /tmp/qcap-demo/plain-payload/file1.txt
+echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" > /tmp/qcap-demo/ed25519.seed.hex
+cargo run -p qcap-cli -- pack /tmp/qcap-demo/plain-payload --out /tmp/qcap-demo/plain.qcap --key /tmp/qcap-demo/ed25519.seed.hex
+cargo run -p qcap-cli -- verify /tmp/qcap-demo/plain.qcap
+cargo run -p qcap-cli -- inspect /tmp/qcap-demo/plain.qcap
 ```
 
-Step 2 — Prepare a sample payload directory:
-
-```bash
-mkdir -p /tmp/qcap-demo/payload
-echo "hello" > /tmp/qcap-demo/payload/file1.txt
-printf "01020304" | xxd -r -p > /tmp/qcap-demo/payload/file2.bin
-```
-
-Step 3 — Create a 32-byte ed25519 seed (hex) for signing:
-
-```bash
-echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" > /tmp/ed25519.seed.hex
-```
-
-Step 4 — Pack a `.qcap` archive:
-
-```bash
-cargo run -p qcap-cli -- pack /tmp/qcap-demo/payload --out /tmp/demo.qcap --key /tmp/ed25519.seed.hex
-```
-
-Step 5 — Verify the capsule:
-
-```bash
-cargo run -p qcap-cli -- verify /tmp/demo.qcap
-```
-
-Step 6 — Inspect metadata quickly:
-
-```bash
-cargo run -p qcap-cli -- inspect /tmp/demo.qcap
-```
-
-Step 7 — Grant a minimal capability token (allow=read):
-
-```bash
-cargo run -p qcap-cli -- grant /tmp/demo.qcap --allow read --expires unix-seconds:9999999999 --key /tmp/ed25519.seed.hex --out /tmp/cap.json
-```
-
-Step 8 — Open (export) the payload using the capability token:
-
-```bash
-cargo run -p qcap-cli -- open /tmp/demo.qcap --cap /tmp/cap.json --out /tmp/exported
-ls -R /tmp/exported
-```
-
-Notes:
-
-* The CLI expects a raw 32-byte ed25519 seed encoded as hex for signing (`--key`).
-* The capability token format is minimal and bound to the Merkle root; `open` enforces `allow=read`.
-* Archives are ZIP-based with layout: `manifest.json`, `payload/…`, `meta/`, `signatures/manifest.sig.json`.
+For capability-gated open/export behavior, use the sealed MVP demo. The current `open` flow requires an identity-bound capability and enforces audience, expiry, path, and optional revocation checks.
 
 
 ---
