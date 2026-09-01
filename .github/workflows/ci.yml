@@ -32,3 +32,12 @@ jobs:
         working-directory: sdks/ts
       - run: npm run build
         working-directory: sdks/ts
+  demo:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - run: powershell -ExecutionPolicy Bypass -File scripts/demo.ps1
