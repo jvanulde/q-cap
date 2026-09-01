@@ -7,6 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --verbose
+      - run: cargo test --workspace --verbose
   go:
     runs-on: ubuntu-latest
     steps:
@@ -17,3 +18,17 @@ jobs:
       - run: |
           cd services/qcap-registry
           go build ./...
+          go test ./...
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sdks/ts/package-lock.json
+      - run: npm ci
+        working-directory: sdks/ts
+      - run: npm run build
+        working-directory: sdks/ts

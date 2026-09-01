@@ -1,55 +1,48 @@
-# MVP Notes: Existing Core & CLI (Task 1)
+# MVP Notes: Current Core & CLI
 
-This notes document summarizes what exists in the repository that we can reuse for the Q-Cap MVP.
+This note reflects the current local prototype. Older task notes that described only the initial hash command are obsolete.
 
-## Observed Structure
+## qcap-core
 
-- `core/qcap-core/` — Rust library with initial crypto helper(s)
-- `core/qcap-cli/` — Rust CLI using `clap` with a demo `hash` subcommand
-- `services/qcap-registry/` — Go health-check service (out of scope for MVP packing/verify)
-- `sdks/ts/` — TypeScript SDK stub (not used for MVP CLI)
+`core/qcap-core` provides small building blocks used by the CLI:
 
-## qcap-core (Rust library)
+- `manifest.rs`: manifest structs for package metadata, encrypted payload file metadata, and recipient key-wrap stanzas.
+- `archive.rs`: ZIP archive creation with `manifest.json`, `payload/`, `meta/`, and `signatures/manifest.sig.json`.
+- `payload_merkle.rs`: deterministic BLAKE3 Merkle root over payload files.
+- `signatures.rs`: ed25519 signing and verification helpers. New archives sign serialized manifest bytes.
+- `capabilities.rs`: MVP JSON capability tokens signed with ed25519.
 
-File: `core/qcap-core/src/lib.rs`
+The crate is useful for the prototype but is not yet a stable public SDK.
 
-- Crates used:
-  - `blake3` — hashing
-  - `thiserror` — error type derivation
-- Public API currently available:
-  - `pub enum QcapError` — basic error wrapper
-  - `pub fn merkle_root_demo(bytes: &[u8]) -> String` — computes a BLAKE3 hash over input bytes and returns "blake3:<hex>".
-- Notes:
-  - There are no modules yet for manifest, archive, merkle tree construction over files, signatures, or capabilities.
-  - The demo function shows canonical digest formatting we can reuse: prefix `blake3:` and hex encoding.
+## qcap-cli
 
-## qcap-cli (Rust CLI)
+`core/qcap-cli` implements the current end-to-end demo workflow:
 
-File: `core/qcap-cli/src/main.rs`
+- `hash`: BLAKE3 demo hash
+- `init`: create local development identity JSON
+- `pack`: create plaintext signed `.qcap`
+- `seal`: create encrypted signed `.qcap` for one recipient
+- `verify`: verify manifest signature and payload Merkle root
+- `inspect`: print archive summary
+- `grant`: issue a signed capability token
+- `open`: verify, authorize, decrypt, and export allowed files
+- `revoke`: create/update a signed soft revocation list
+- `publish` / `fetch`: push/pull artifacts through the dev registry
+- `publish-revocations` / `fetch-revocations`: push/pull revocation lists
+- `sample-geopackage`: create a tiny valid GeoPackage fixture
 
-- Uses `clap` for argument parsing.
-- Subcommands:
-  - `hash <input>` — computes BLAKE3 using `qcap_core::merkle_root_demo` over the provided string.
-- Notes:
-  - CLI wiring is in place. We can extend with additional subcommands: `pack`, `verify`, and `inspect`.
+## Current Acceptance Coverage
 
-## Reuse Plan for MVP
+Rust integration tests cover:
 
-- Hashing:
-  - Reuse `blake3` crate and output format (`blake3:<hex>`); augment with file-based Merkle construction.
-- Error handling:
-  - Reuse `QcapError` and extend with variants as needed.
-- CLI parsing:
-  - Reuse current `clap` setup; add subcommands with minimal boilerplate impact.
+- pack then verify
+- payload tamper rejection
+- manifest metadata tamper rejection
+- grant/open flow
+- rejection of an untrusted capability signer
+- rejection of a wrong revocation issuer
+- revoked capability rejection
+- sealed package path filtering
+- byte-for-byte GeoPackage export preservation
 
-## Gaps to Implement (Upcoming Tasks)
-
-- Manifest struct and JSON helpers (`manifest.rs`).
-- Archive creation and reading (`archive.rs`) using tar+gz or zip.
-- Deterministic payload Merkle root over directory contents.
-- Signature bundle and ed25519 sign/verify.
-- CLI commands: `pack`, `verify`, `inspect` (+ optional capability token later).
-
-## Quick Conclusions
-
-The codebase is intentionally minimal. We have the hashing crate and CLI skeleton we need to build upon. Next step (Task 2) is to define the manifest struct and helpers in `qcap-core` with unit tests.
+Remaining test gaps include registry publish/fetch integration, path grammar edge cases, malicious ZIP entries, malformed recipient stanzas, expiry edge cases, and revocation freshness behavior.
