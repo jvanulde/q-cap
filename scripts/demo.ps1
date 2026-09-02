@@ -18,7 +18,12 @@ $RegistryErr = Join-Path $Work "registry.err.log"
 $RegistryExe = Join-Path $Work "qcap-registry.exe"
 $QcapExe = Join-Path $Root "target\debug\qcap-cli.exe"
 $CargoExe = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
-$GoExe = "C:\Program Files\Go\bin\go.exe"
+$GoCommand = Get-Command go -ErrorAction SilentlyContinue
+if ($GoCommand) {
+  $GoExe = $GoCommand.Source
+} else {
+  $GoExe = "C:\Program Files\Go\bin\go.exe"
+}
 
 function Step($Message) {
   Write-Host "==> $Message"
