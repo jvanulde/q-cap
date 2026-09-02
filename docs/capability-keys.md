@@ -1,184 +1,96 @@
-Here is a practical explanation of **how someone gets a capability key** after downloading a Q-Cap capsule.
+# Capability Tokens
 
-# Start With the Basic Idea
+Capability tokens are separate signed JSON files that tell the current CLI which payload paths may be exported for a specific recipient identity.
 
-A **capability key (capability token)** is a small, signed permission slip that says:
+They are not embedded in the `.qcap` archive.
 
-> “Given this specific Q-Cap file, this person may see or do *exactly* these things.”
+## Current Token Shape
 
-It is:
+Current fields:
 
-* **issued by the capsule’s owner/producer**
-* **cryptographically bound to the capsule’s Merkle root**
-* **checked locally by the Q-Cap toolset**
-
-So the capsule itself enforces the permissions.
-
-# In Practice: How Does a User Get One?
-
-There are **three real-world paths**, depending on the deployment model.
-
-
-## **Path 1 — The Producer Hands Out Capability Tokens**
-
-This is the simplest and primary model.
-
-### **Step 1 — User downloads the capsule file**
-
-```
-dataset.qcap
+```json
+{
+  "cap_root": "blake3:<payload-merkle-root>",
+  "allow": "read;path=reports/*;aud=<recipient-id>",
+  "expires": "unix-seconds:9999999999",
+  "signature": "<ed25519-signature-hex>",
+  "public_key": "<issuer-public-key-hex>",
+  "algorithm": "ed25519"
+}
 ```
 
-### **Step 2 — User requests access from the owner**
+The current signed payload is:
 
-E.g., they email, submit a form, authenticate to a portal, etc.
-
-### **Step 3 — The owner runs:**
-
-```
-qcap mint-cap dataset.qcap \
-   --role partner_analyst \
-   --allow knn:index_clip512 \
-   --reveal columns:lat,lon,class \
-   --expires 2025-12-31
+```text
+cap_root|allow|expires
 ```
 
-This command generates something like:
+This is a prototype serialization. It should become canonical structured signing before the format is treated as stable.
 
-```
-cap_47af93a0.jsoncbor
-```
+## What A Capability Currently Means
 
-### **Step 4 — The owner sends the capability token to the user**
+In the MVP, a capability can authorize:
 
-The user stores it locally.
-
-### **Step 5 — The user runs commands using the capability**
+- operation: currently only `read`
+- audience: recipient identity id
+- path: simple path pattern
+- expiry: `unix-seconds:<ts>`
 
 Example:
 
-```
-qcap reveal dataset.qcap --cap cap_47af93a0 > subset.qcap
-```
-
-or, to run a Lens:
-
-```
-qcap run-lens dataset.qcap clip-embed --cap cap_47af93a0
-```
-
-This is the **standard operational model**.
-
-
-## **Path 2 — The Capsule Contains a Public-Access Policy**
-
-Some Q-Caps intentionally contain “open” policy entries, like:
-
-* Anyone can run kNN on the public index.
-* Anyone can view non-sensitive columns.
-* More sensitive operations still require a capability token.
-
-This is useful for:
-
-* Publicly released, non-sensitive views
-* Academic or open-data contexts
-* “Open capsule / closed capsule” dual publishing (from your academic paper)
-
-In this case the user **does not need a capability token** for allowed actions.
-
-
-## **Path 3 — There Is an Automated Authorization Service**
-
-Nothing in Q-Cap requires it — but organizations can choose to have a server issue tokens automatically.
-
-For example:
-
-* A web portal that authenticates the user
-* A SharePoint page with an embedded Q-Cap token issuer
-* An internal “Data Access Broker”
-* A STAC-like catalogue that hands out Q-Cap tokens per asset
-
-The workflow becomes:
-
-1. User downloads capsule
-2. User logs into a controlled environment
-3. System issues capability token based on role/group/purpose
-4. User runs Q-Cap locally using that token
-
-This is entirely optional.
-
-# Why Capability Tokens Work So Well
-
-Everything is bound together:
-
-* The token is **signed** (COSE Sign1)
-* The token includes **qcap_root**:
-
-  ```
-  "qcap_root": "blake3:abc123…"
-  ```
-* The capsule enforces access **offline**
-* The **privacy ledger records** use of sensitive permissions
-* Sub-views retain cryptographic linkage to the original
-
-From the v0 spec:
-
-> “Capability tokens (COSE-signed) describe selectors and actions; tokens bind to the capsule’s Merkle root.”
->
-
-# A Concrete Realistic Scenario
-
-Let’s say analyst Emma downloads:
-
-```
-orders_2025.qcap
+```bash
+qcap grant dataset.qcap \
+  --issuer issuer.identity.json \
+  --audience <recipient-id> \
+  --path "reports/*" \
+  --expires unix-seconds:9999999999 \
+  --out cap.json
 ```
 
-She wants to:
+## Enforcement
 
-* run a Lens called `force-readiness@1.0`
-* export aggregated province-level counts
+`qcap open` enforces capability checks before exporting files.
 
-She asks the data owner.
+The CLI verifies:
 
-Owner runs:
+- archive signature and Merkle root
+- capability signature
+- capability signer equals archive signer
+- capability root equals archive root
+- audience matches the local identity
+- expiry has not passed
+- requested paths match the allowed path caveat
+- optional revocation list does not revoke the token
 
-```
-qcap mint-cap orders_2025.qcap \
-   --role emma \
-   --allow lens-run:force-readiness@1.0 \
-   --allow aggregate:dp_count \
-   --epsilon 0.5 \
-   --expires 2026-03-31
-```
+## Important Limitation
 
-Emma now receives:
+The current sealed archive uses one content key for the whole package. Path scoping is enforced by the CLI during export. It is not cryptographic per-path compartmentalization.
 
-```
-emma_cap_2026.cbor
-```
+If Q-Cap needs hard cryptographic least privilege by path, the design should move to per-file keys, per-policy keys, or another compartmentalized key schedule.
 
-She can now do:
+## Path Patterns
 
-```
-qcap run-lens orders_2025.qcap force-readiness@1.0 --cap emma_cap_2026.cbor
-```
+Current path matching is deliberately simple:
 
-If she tries anything else (export raw rows, circumvent DP restrictions), the capsule denies it with:
+- `*` matches all paths
+- `reports/summary.txt` matches exactly that path
+- `reports/*` matches paths with the `reports/` prefix
+- `*.gpkg` matches paths with the `.gpkg` suffix
 
-```
-ERROR: action not permitted by capability
-```
+There is no complete glob grammar yet.
 
-No server. No firewall rules. The capsule enforces everything itself.
+## Future Capability Model
 
-## Key Insight
+Future versions may support:
 
-**The capability token is not embedded inside the Q-Cap. It is a separate signed object delivered to the user.**
+- COSE or another standard token envelope
+- embedded Trust Anchors
+- multiple issuers
+- delegated/attenuated capabilities
+- structured caveats instead of string parsing
+- richer selectors
+- policy graph integration
+- lens execution
+- privacy budget controls
 
-This separation:
-
-* removes need for re-encryption
-* avoids creating new variants of the capsule
-* supports multi-party collaboration
-* keeps access control auditable and portable
+Those are not implemented in the current MVP.

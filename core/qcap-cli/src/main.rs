@@ -11,7 +11,7 @@ use qcap_core::archive::create_qcap_archive_with_signature;
 use qcap_core::capabilities::CapabilityToken;
 use qcap_core::manifest::{PayloadFile, QcapManifest, RecipientStanza};
 use qcap_core::payload_merkle::compute_payload_merkle_root;
-use qcap_core::signatures::{sign_merkle_root, verify_signature, QcapSignatureBundle};
+use qcap_core::signatures::{sign_manifest, verify_manifest_signature, QcapSignatureBundle};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rusqlite::{params, Connection};
@@ -329,7 +329,8 @@ fn pack_plain(input_dir: &Path, out: &Path, key: &Path) -> Result<()> {
     let root = compute_payload_merkle_root(input_dir)?;
     let manifest = QcapManifest::new_with_now("0.1.0", &root, None, serde_json::json!({}));
     let signing_key = signing_key_from_seed_file(key)?;
-    let sig_bundle = sign_merkle_root(&root, &signing_key);
+    let manifest_bytes = manifest.to_json_bytes()?;
+    let sig_bundle = sign_manifest(&manifest_bytes, &root, &signing_key);
     create_qcap_archive_with_signature(input_dir, &manifest, &sig_bundle, out)?;
     println!(
         "Packed {}\n- merkle root: {}\n- output: {}",
@@ -386,7 +387,8 @@ fn seal(input_dir: &Path, out: &Path, issuer_path: &Path, recipient_path: &Path)
         files,
         recipients,
     );
-    let sig = sign_merkle_root(&merkle_root, &issuer.signing_key()?);
+    let manifest_bytes = manifest.to_json_bytes()?;
+    let sig = sign_manifest(&manifest_bytes, &merkle_root, &issuer.signing_key()?);
 
     create_qcap_archive_with_signature(&encrypted_root, &manifest, &sig, out)?;
     println!(
@@ -436,10 +438,17 @@ fn revoke(cap_path: &Path, issuer_path: &Path, out: &Path, reason: &str) -> Resu
     cap.verify()?;
     let issuer: Identity = read_json(issuer_path)?;
     let signing_key = issuer.signing_key()?;
+    let issuer_public_key = hex::encode(signing_key.verifying_key().to_bytes());
+    if cap.public_key != issuer_public_key {
+        return Err("revocation issuer does not match capability signer".into());
+    }
 
     let mut list = if out.exists() {
         let list: RevocationList = read_json(out)?;
         list.verify()?;
+        if list.public_key != issuer_public_key {
+            return Err("existing revocation list signer does not match issuer".into());
+        }
         list
     } else {
         RevocationList::empty(&signing_key)
@@ -482,8 +491,14 @@ fn open_archive(
     let identity: Identity = read_json(identity_path)?;
     let cap: CapabilityToken = read_json(cap_path)?;
     cap.verify()?;
+    if cap.public_key != report.signature.public_key {
+        return Err("capability signer is not trusted for this archive".into());
+    }
     if let Some(revocations) = load_revocations(revocations_path, revocations_url)? {
         revocations.verify()?;
+        if revocations.public_key != report.signature.public_key {
+            return Err("revocation list signer is not trusted for this archive".into());
+        }
         if revocations.revokes(&cap) {
             return Err("capability has been revoked".into());
         }
@@ -582,9 +597,9 @@ fn open_plain(file: &Path, access: &Access, out: &Path) -> Result<()> {
 fn verify_archive(file: &Path) -> Result<VerifyReport> {
     let f = fs::File::open(file)?;
     let mut zip = ZipArchive::new(f)?;
-    let manifest = read_manifest(&mut zip)?;
+    let (manifest, manifest_bytes) = read_manifest(&mut zip)?;
     let signature = read_signature(&mut zip)?;
-    verify_signature(&signature)?;
+    verify_manifest_signature(&signature, &manifest_bytes)?;
 
     let tmp = tempdir()?;
     let mut payload_files = 0usize;
@@ -688,6 +703,9 @@ fn publish_revocations(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| revocations.public_key.clone());
+    if issuer != revocations.public_key {
+        return Err("revocations issuer path must match revocation signer public key".into());
+    }
     let url = revocations_url(registry, &issuer);
     let bytes = fs::read(file)?;
     let mut request = ureq::post(&url).set("Content-Type", "application/qcap-revocations+json");
@@ -995,11 +1013,12 @@ fn derive_wrap_key(shared: &[u8; 32], package_id: &str) -> [u8; 32] {
     *h.finalize().as_bytes()
 }
 
-fn read_manifest(zip: &mut ZipArchive<fs::File>) -> Result<QcapManifest> {
+fn read_manifest(zip: &mut ZipArchive<fs::File>) -> Result<(QcapManifest, Vec<u8>)> {
     let mut mf = zip.by_name("manifest.json")?;
     let mut bytes = Vec::new();
     mf.read_to_end(&mut bytes)?;
-    Ok(QcapManifest::from_json_bytes(&bytes)?)
+    let manifest = QcapManifest::from_json_bytes(&bytes)?;
+    Ok((manifest, bytes))
 }
 
 fn read_signature(zip: &mut ZipArchive<fs::File>) -> Result<QcapSignatureBundle> {
