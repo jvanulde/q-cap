@@ -30,7 +30,7 @@ q-cap/
   api/
     proto/           # Protobuf IDL (stub)
   .github/workflows/ # CI
-  docs/              # Project docs (stubs)
+  docs/              # Project docs
 ```
 
 ---
@@ -272,9 +272,9 @@ Post-MVP roadmap:
 
 ## Q-Cap format (preview)
 
-A `.qcap` is a **single file** (ZIP or tar+gz) containing:
+A `.qcap` is currently a **single ZIP file** containing:
 
-* `manifest.json` — schema version, Merkle root, issuer, policies, metadata
+* `manifest.json` — schema version, Merkle root, issuer, recipients, algorithms, and metadata
 * `payload/` — arbitrary files (optionally encrypted per file)
 * `meta/` — readme, license, schemas, STAC/OGC tags
 * `signatures/` — detached signatures (ed25519) over the serialized manifest
@@ -290,6 +290,7 @@ A `.qcap` is a **single file** (ZIP or tar+gz) containing:
 
 * Memory-safe languages (Rust core; Go service)
 * Modern crypto defaults in the MVP flow (XChaCha20-Poly1305, BLAKE3, ed25519)
+* Prototype threat model: see `docs/threat-model.md`
 * Keys:
 
   * Dev: local identity JSON; Argon2id-protected keyfiles are planned
@@ -316,7 +317,7 @@ The format supports:
 
 * Transporting **GeoPackage** unchanged inside `.qcap`
 * Embed STAC/OGC metadata in `meta/`
-* Stream-verify large rasters via Merkle while fetching ranges
+* Preserve arbitrary geospatial payload files inside `.qcap` archives
 
 ---
 
@@ -335,7 +336,7 @@ Use **Conventional Commits** (e.g., `feat(cli): add grant command`) and open an 
 ## License & citation
 
 * **License:** Apache-2.0 (see `LICENSE`)
-* **Cite:** `CITATION.cff` (to be added)
+* **Cite:** `CITATION.cff`
 
 ---
 

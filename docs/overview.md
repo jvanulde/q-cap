@@ -13,7 +13,7 @@ The implemented prototype proves a narrow but useful workflow:
 - open/export only paths allowed by the capability
 - optionally check signed soft revocation lists
 
-This repository should not yet be described as a hardened security product, stable open standard, complete SDK ecosystem, or production registry.
+This repository should not yet be described as a hardened security product, stable open standard, complete SDK ecosystem, or production registry. For security assumptions and non-goals, see [threat-model.md](threat-model.md).
 
 ## Implemented Components
 
@@ -63,6 +63,7 @@ The intended direction is an artifact-centric data governance format: portable p
 To get there, the next major work should focus on:
 
 - a real format specification
+- continued threat-model review as implementation changes
 - canonical signing rules
 - a trust-anchor model
 - key rotation and revocation freshness semantics

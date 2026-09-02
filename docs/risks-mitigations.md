@@ -1,6 +1,6 @@
 # Risks & Mitigations
 
-This document tracks risks for the current prototype and planned mitigations. It is not a normative security specification.
+This document tracks risks for the current prototype and planned mitigations. It is not a normative security specification. For the explicit attacker model, trust boundaries, security goals, and non-goals, see [threat-model.md](threat-model.md).
 
 ## Prototype Status Risk
 
