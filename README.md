@@ -1,18 +1,18 @@
 # Q-Cap
 
-*Q-Cap* (Capability-based, encryptable content packages) is a packaging and distribution format that lets you **publish data openly** while keeping access **cryptographically controlled** by capabilities. Think: `.qcap` files that travel and sync like regular artifacts, but decrypt only for holders of the right capability tokens.
+*Q-Cap* (Capability-based, encryptable content packages) is an experimental packaging and distribution format for publishing encrypted data artifacts with signed, capability-gated export workflows. Think: `.qcap` files that travel and sync like regular artifacts, but decrypt only for intended recipients using tools that enforce signed capability tokens.
 
-> Status: **working local MVP** - this repository includes a Rust core library and CLI, a minimal Go registry service, and a TypeScript SDK stub. The core MVP flow is implemented locally: create identities, seal encrypted `.qcap` artifacts, verify them, publish/fetch through the dev registry, grant path-scoped capabilities, open authorized payloads, and block revoked capabilities.
+> Status: **working local prototype / MVP demo** - this repository includes a Rust core library and CLI, a minimal Go dev registry service, and a TypeScript SDK stub. The implemented flow is local and narrow: create development identities, seal encrypted `.qcap` artifacts, verify signed manifests and payload Merkle roots, publish/fetch through the dev registry, grant path-scoped capabilities, open authorized payloads, and optionally block revoked capabilities. It is not yet a hardened security product, stable file format, production registry, or complete SDK ecosystem.
 
 ---
 
 ## Why Q-Cap?
 
-* **Confidentiality-by-default**: Envelope encryption per file with modern Authentication Encryption with Associated Data (AEAD).
-* **Least-privilege sharing**: Capability tokens (macaroons) with caveats (expiry, paths, audience).
-* **Integrity & provenance**: BLAKE3 Merkle tree; signed manifest.
+* **Confidentiality-by-default**: Envelope encryption per file with modern Authentication Encryption with Associated Data (AEAD) for intended recipients.
+* **Capability-gated export**: Signed capability tokens with expiry, path, and audience checks enforced by the current CLI. The MVP does not yet provide cryptographic per-path compartmentalization.
+* **Integrity & provenance foundation**: BLAKE3 Merkle tree; signed manifest.
 * **Portable**: Single-file `.qcap` artifact; easy to mirror/cdn.
-* **Ecosystem-friendly**: SDKs for TypeScript and Python; registry with S3/MinIO.
+* **Ecosystem direction**: TypeScript/Python SDKs and production registry backends are planned; only a TypeScript stub and local Go dev registry exist today.
 
 ---
 
@@ -30,7 +30,7 @@ q-cap/
   api/
     proto/           # Protobuf IDL (stub)
   .github/workflows/ # CI
-  docs/              # Project docs (stubs)
+  docs/              # Project docs
 ```
 
 ---
@@ -48,26 +48,27 @@ flowchart LR
 
   %% --- Registry Service ---
   subgraph Registry["qcap-registry (Go)"]
-    API["REST/gRPC (grpc-gateway)"]
+    API["REST dev API"]
     REV["Revocations API"]
   end
 
   %% --- Storage & Indexes ---
   subgraph Storage["Storage & Indexes"]
-    S3["S3/MinIO\n.qcap artifacts & manifests"]
-    PG["Postgres\nmanifest index & issuance logs"]
-    RED["Redis\ncache"]
+    FS["Local filesystem\n.qcap artifacts & index"]
+    S3["S3/MinIO\nplanned"]
+    PG["Postgres\nplanned"]
+    RED["Redis\nplanned"]
   end
 
   %% --- Core Library ---
   subgraph Core["qcap-core (Rust)"]
-    CORE["Crypto • Merkle (BLAKE3) • Capabilities (macaroons)\nAEAD: XChaCha20-Poly1305 • ed25519 • planned Argon2id keyfiles"]
+    CORE["Crypto • Merkle (BLAKE3) • signed capabilities\nAEAD: XChaCha20-Poly1305 • ed25519 • planned Argon2id keyfiles"]
   end
 
   %% --- Consumers / SDKs ---
   subgraph Consumers["Consumers (SDKs)"]
-    TS["TypeScript SDK (WASM)"]
-    PY["Python SDK (cffi)"]
+    TS["TypeScript SDK stub"]
+    PY["Python SDK planned"]
   end
 
   %% --- Optional integrations ---
@@ -76,17 +77,18 @@ flowchart LR
 
   %% --- Flows ---
   CLI -->|publish .qcap + manifest| API
-  API -->|store artifacts| S3
-  API -->|index manifests| PG
-  API -->|cache hot entries| RED
-  API --> TLOG
+  API -->|store artifacts| FS
+  API -. planned .-> S3
+  API -. planned .-> PG
+  API -. planned .-> RED
+  API -. planned .-> TLOG
   OIDC -.-> API
 
   %% Fetch paths
   TS -->|fetch by id| API
   PY -->|fetch by id| API
-  TS -->|download .qcap| S3
-  PY -->|download .qcap| S3
+  TS -->|planned download .qcap| API
+  PY -->|planned download .qcap| API
 
   %% Open/verify using core semantics
   TS -->|open • verify| CORE
@@ -98,15 +100,15 @@ flowchart LR
   REV -->|serve revocations.json| PY
 
   %% Bindings
-  CORE -. WASM/FFI .- TS
-  CORE -. FFI .- PY
+  CORE -. planned WASM/FFI .- TS
+  CORE -. planned FFI .- PY
 
   %% Styling
   classDef svc fill:#eef,stroke:#446,stroke-width:1px;
   classDef store fill:#efe,stroke:#474,stroke-width:1px;
   classDef core fill:#fee,stroke:#844,stroke-width:1px;
   class API,REV,OIDC svc;
-  class S3,PG,RED store;
+  class FS,S3,PG,RED store;
   class CORE core;
 ```
 
@@ -198,7 +200,7 @@ cargo run -p qcap-cli -- fetch-revocations <issuer-public-key> --out /tmp/qcap-d
 cargo run -p qcap-cli -- open /tmp/qcap-demo/fetched.qcap --cap /tmp/qcap-demo/cap.json --identity /tmp/qcap-demo/recipient.identity.json --revocations-url http://127.0.0.1:8080/revocations/<issuer-public-key>/revocations.json --out /tmp/qcap-demo/revoked-exported
 ```
 
-This is an MVP, not a hardened security product. It uses XChaCha20-Poly1305 for file encryption, X25519-derived wrapping keys for recipients, ed25519 signatures over the Merkle root, and signed capability tokens with enforced expiry, audience, and path constraints.
+This is an MVP, not a hardened security product. It uses XChaCha20-Poly1305 for file encryption, X25519-derived wrapping keys for recipients, ed25519 signatures over serialized manifest bytes, and signed capability tokens with enforced expiry, audience, signer, and path constraints.
 
 ### Run the registry (dev)
 
@@ -243,10 +245,10 @@ Implemented in the local MVP:
 * `qcap init` - local MVP identity/key material and recipient fingerprint.
 * `qcap pack` - plaintext `.qcap` archive with `manifest.json`, `payload/`, `meta/`, and detached signature.
 * `qcap seal` - per-file XChaCha20-Poly1305 envelope encryption with recipient wrapping.
-* `qcap verify` - manifest/signature/Merkle verification.
+* `qcap verify` - signed manifest and payload Merkle verification.
 * `qcap inspect` - manifest, recipients, Merkle root, encryption state, and payload summary.
 * `qcap grant` - signed capability tokens with expiry, audience, and path caveats.
-* `qcap open` - verify + decrypt/export only authorized payload paths.
+* `qcap open` - verify + decrypt/export only authorized payload paths; capability and revocation signers must match the archive signer.
 * `qcap revoke` - signed soft revocation lists.
 * `qcap publish` / `qcap fetch` - push/pull through the dev registry.
 * `qcap publish-revocations` / `qcap fetch-revocations` - registry-backed revocation distribution.
@@ -254,7 +256,7 @@ Implemented in the local MVP:
 Before calling this a solid MVP release:
 
 * Keep the sealed demo as the canonical acceptance test and run it in CI where practical.
-* Add integration tests for publish/fetch, capability denial, path filtering, and revoked-token denial.
+* Add integration tests for publish/fetch and more edge cases around path filtering, issuer trust, and revoked-token denial.
 * Document the CLI output contract well enough for SDKs and automation to rely on it.
 * Remove generated binaries and cache artifacts from commits; keep the repo source-only.
 * Make security limits explicit: local identity JSON files are development-only, revocation is soft, and registry auth is token-based.
@@ -270,17 +272,17 @@ Post-MVP roadmap:
 
 ## Q-Cap format (preview)
 
-A `.qcap` is a **single file** (ZIP or tar+gz) containing:
+A `.qcap` is currently a **single ZIP file** containing:
 
-* `manifest.json` — schema version, Merkle root, issuer, policies, metadata
+* `manifest.json` — schema version, Merkle root, issuer, recipients, algorithms, and metadata
 * `payload/` — arbitrary files (optionally encrypted per file)
 * `meta/` — readme, license, schemas, STAC/OGC tags
-* `signatures/` — detached signatures (ed25519) over the manifest & Merkle root
+* `signatures/` — detached signatures (ed25519) over the serialized manifest
 
-**Integrity**: BLAKE3 Merkle tree over payload files (root is signed).
+**Integrity**: BLAKE3 Merkle tree over payload files; the serialized manifest is signed and includes the root.
 **Confidentiality**: XChaCha20-Poly1305 per file; data keys wrapped to recipients.
-**Capabilities**: Macaroons with caveats (expiry, audience, allowed paths, purpose).
-**Revocation (soft)**: signed `revocations.json` published to the registry.
+**Capabilities**: signed MVP JSON tokens with expiry, audience, and allowed-path caveats. These are not macaroons yet.
+**Revocation (soft)**: signed `revocations.json` can be published to the registry and checked by clients that opt into revocation lookup.
 
 ---
 
@@ -288,13 +290,14 @@ A `.qcap` is a **single file** (ZIP or tar+gz) containing:
 
 * Memory-safe languages (Rust core; Go service)
 * Modern crypto defaults in the MVP flow (XChaCha20-Poly1305, BLAKE3, ed25519)
+* Prototype threat model: see `docs/threat-model.md`
 * Keys:
 
   * Dev: local identity JSON; Argon2id-protected keyfiles are planned
-  * Prod: cloud KMS / HSM for issuer roots; rotation documented
+  * Prod: cloud KMS / HSM for issuer roots and rotation docs are planned
 * Supply chain:
 
-  * CI includes CodeQL, SBOM (Syft), image scanning (Trivy), signed releases (cosign)
+  * Current CI builds and tests Rust, tests the Go registry, and builds the TypeScript stub. CodeQL, SBOM (Syft), image scanning (Trivy), and signed releases (cosign) are planned.
 
 > **Important:** Q-Cap’s security depends on proper key handling and capability distribution. Never commit secrets; review `SECURITY.md` before enabling external publication.
 
@@ -314,7 +317,7 @@ The format supports:
 
 * Transporting **GeoPackage** unchanged inside `.qcap`
 * Embed STAC/OGC metadata in `meta/`
-* Stream-verify large rasters via Merkle while fetching ranges
+* Preserve arbitrary geospatial payload files inside `.qcap` archives
 
 ---
 
@@ -333,7 +336,7 @@ Use **Conventional Commits** (e.g., `feat(cli): add grant command`) and open an 
 ## License & citation
 
 * **License:** Apache-2.0 (see `LICENSE`)
-* **Cite:** `CITATION.cff` (to be added)
+* **Cite:** `CITATION.cff`
 
 ---
 

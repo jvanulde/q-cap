@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use Q-Cap, please cite it using the metadata in this file."
+title: "Q-Cap"
+type: software
+version: 0.1.0
+authors:
+  - name: "Q-Cap contributors"
+license: "Apache-2.0"
+repository-code: "https://github.com/jvanulde/q-cap"

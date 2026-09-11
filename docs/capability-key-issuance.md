@@ -1,163 +1,121 @@
-# **Decentralized Issuance Model**
+# Capability Issuance
 
-*(Normative)*
+This document describes the implemented MVP behavior and the intended future trust-anchor model.
 
-## **Overview**
+## Current MVP Model
 
-Q-Cap supports a decentralized authorization model in which **multiple independent entities** may issue capability tokens for a capsule.
-Authorization does **not** depend on any centralized service, online infrastructure, or shared PKI.
-Instead, each capsule embeds its own **Trust Anchors**, defining which issuers are authorized to sign tokens.
+In the current prototype, the same issuer key signs:
 
-A capability token is valid **if and only if**:
+- the `.qcap` manifest
+- capability tokens for that archive
+- revocation lists for those capability tokens
 
-1. It is signed by a private key whose corresponding public key appears in the capsule’s **Trust Anchors** TLV, and
-2. The token’s `qcap_root` field matches the capsule’s Merkle root.
+`qcap open` rejects a capability unless the capability signer's public key matches the archive manifest signer's public key.
 
-If either condition fails, the capsule must reject the token.
+This is a deliberately small trust model. It closes the earlier self-signed-token hole, but it is not the final decentralized Trust Anchor design.
 
-This model enables **federated, multi-agency, multi-party governance** while maintaining offline verifiability and strong cryptographic containment.
+## Current Issuance Flow
 
----
+1. The producer creates an issuer identity:
 
-## **Trust Anchors (Authorized Issuers)**
+   ```bash
+   qcap init --name issuer --out issuer.identity.json
+   ```
 
-Each Q-Cap contains a TLV section:
+2. The producer seals a package:
 
+   ```bash
+   qcap seal payload/ \
+     --issuer issuer.identity.json \
+     --recipient recipient.identity.json \
+     --out dataset.qcap
+   ```
+
+3. The producer grants a capability for a recipient identity id:
+
+   ```bash
+   qcap grant dataset.qcap \
+     --issuer issuer.identity.json \
+     --audience <recipient-id> \
+     --path "reports/*" \
+     --expires unix-seconds:9999999999 \
+     --out cap.json
+   ```
+
+4. The recipient opens the package:
+
+   ```bash
+   qcap open dataset.qcap \
+     --cap cap.json \
+     --identity recipient.identity.json \
+     --out exported/
+   ```
+
+## Current Validity Rules
+
+A capability is valid for an archive only when:
+
+- the archive manifest signature verifies
+- the archive payload Merkle root verifies
+- the capability signature verifies
+- the capability signer public key matches the archive manifest signer public key
+- the capability `cap_root` equals the archive Merkle root
+- the operation is `read`
+- the audience equals the recipient identity id
+- the expiry is supported and not expired
+- the path caveat allows at least one payload file
+
+## Current Revocation Flow
+
+The issuer can create or update a signed revocation list:
+
+```bash
+qcap revoke \
+  --cap cap.json \
+  --issuer issuer.identity.json \
+  --reason rotation \
+  --out revocations.json
 ```
-0x0001 – Trust Anchors
+
+`qcap revoke` rejects an issuer that did not sign the capability.
+
+`qcap open` only checks revocation when the caller provides a local revocation file or revocation URL:
+
+```bash
+qcap open dataset.qcap \
+  --cap cap.json \
+  --identity recipient.identity.json \
+  --revocations revocations.json \
+  --out exported/
 ```
 
-This section defines one or more COSE_Key objects representing authorized issuers.
+Revocation is therefore soft and distribution-dependent in the MVP.
 
-Each Trust Anchor includes:
+## Not Implemented Yet
 
-* **Public key material** (Ed25519, ECDSA P-256, ML-DSA)
-* **Key identifier (kid)**
-* **Optional metadata** (expiry, revocation hints, jurisdiction, role tags)
+The current prototype does not implement:
 
-These keys represent the **set of issuers** permitted to mint capability tokens for this capsule.
+- embedded Trust Anchors
+- multiple authorized issuers per capsule
+- COSE signatures
+- TLV sections
+- key identifiers
+- issuer metadata
+- threshold issuance
+- delegated issuance
+- key rotation metadata
+- mandatory revocation freshness checks
 
-### **Normative Requirement**
+## Future Direction
 
-> A capsule MUST accept a capability token only if its COSE signature validates against one of the public keys declared in the Trust Anchors TLV.
+The intended future model is for each capsule to declare one or more authorized issuer keys, then accept capability tokens signed by any valid Trust Anchor. That would support federated and offline issuance without requiring all tokens to be signed by the archive's original manifest signer.
 
----
+That design still needs a concrete specification for:
 
-## **Decentralized Issuance**
-
-Any entity possessing a private key corresponding to a Trust Anchor MAY issue capability tokens.
-Issuance does not require network connectivity, a central registry, or communication with other issuers.
-
-### Examples of decentralized issuance:
-
-* Multi-department collaboration (e.g., DND, NRCan, Public Safety each issue tokens).
-* Role-based delegation inside a single organization.
-* Field-level issuing authority in air-gapped or tactical environments.
-* Federated research or international partnerships.
-
-### Benefits
-
-* No single point of control or failure
-* No dependency on online authorization servers
-* Works across air-gapped and cross-domain environments
-* Perfectly suited for defense, emergency response, and distributed science
-
----
-
-## **Token Binding to Capsules**
-
-Each capability token MUST contain a `qcap_root` field:
-
-```
-"qcap_root": "blake3:<32-byte digest>"
-```
-
-This binds the token to **one specific capsule state**.
-
-### **Normative Requirement**
-
-> A capsule MUST reject any token whose `qcap_root` does not exactly match its own Merkle root.
-
-Consequences:
-
-* Tokens **cannot be reused** across modified or corrupted copies.
-* Tokens **do not migrate** to sub-views or derived capsules unless explicitly re-issued.
-* Replay attacks across unrelated capsules are cryptographically impossible.
-
----
-
-## **Sub-Views and Issuer Scope**
-
-A sub-view produced via `qcap reveal` results in a new capsule with a **new Merkle root**.
-
-### Normative rules:
-
-* Capability tokens for the parent capsule MUST NOT grant permissions to the sub-view.
-* Sub-views MUST define their own Trust Anchors if further delegated issuance is allowed.
-* New tokens for the sub-view MUST be minted explicitly, referencing the sub-view’s root.
-
-This prevents capability “leakage” from high-fidelity to low-fidelity or public artifacts.
-
----
-
-## **Governance Flexibility**
-
-Issuing authorities may define their own governance structures, such as:
-
-* A single “root” authority with delegated subordinate keys
-* Multiple equal-authority issuers across organizations
-* Role-based distinctions (e.g., “auditor”, “analyst”, “external partner”)
-* Jurisdiction-bound issuers
-* Time-limited or purpose-restricted issuers
-
-The capsule does not mandate a governance model; it **enforces** the one declared in the Trust Anchors.
-
----
-
-## **Key Rotation and Revocation**
-
-Because Q-Cap capsules are immutable, trust-anchor rotation occurs through **append-only updates**:
-
-1. Add new issuer keys via a TLV update.
-2. Mark old keys as expired or revoked in Trust Anchor metadata.
-3. Update the Merkle DAG and Signatures accordingly.
-
-Verification tools MUST check Trust Anchor metadata for revocation/expiry markers.
-
----
-
-## **Security Properties**
-
-### **Offline Verifiability**
-
-All issuer legitimacy checks occur offline using Trust Anchors embedded in the capsule.
-
-### **Decentralized Trust**
-
-No central directory or CA is required; capsules express their own trust boundaries.
-
-### **Strong Containment**
-
-Tokens cannot be misapplied to:
-
-* other datasets,
-* other versions, or
-* derived capsules.
-
-### **Resistance to Rogue Issuance**
-
-A malicious party cannot issue valid tokens unless their public key is explicitly listed in Trust Anchors.
-
----
-
-## **Summary**
-
-The decentralized issuance model allows Q-Cap to function as a **self-governing, portable data artifact** that supports:
-
-* Military and emergency offline operations
-* Interdepartmental and coalition sharing
-* Zero-trust, cross-domain workflows
-* Multilateral scientific collaboration
-* Distributed governance without centralized servers
-
-This model is a key differentiator of Q-Cap relative to traditional file formats and platform-centric access control systems.
+- trust-anchor encoding
+- canonical token signing
+- key identifiers
+- trust-anchor expiry and revocation
+- rotation across immutable capsule versions
+- multi-authority governance
+- failure behavior when revocation status is stale or unavailable

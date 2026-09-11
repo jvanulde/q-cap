@@ -1,213 +1,114 @@
-# **Risks & Mitigations**
+# Risks & Mitigations
 
-*(Normative)*
+This document tracks risks for the current prototype and planned mitigations. It is not a normative security specification. For the explicit attacker model, trust boundaries, security goals, and non-goals, see [threat-model.md](threat-model.md).
 
-This section identifies technical, operational, and governance risks associated with Q-Cap capsules and defines required or recommended mitigations.
-Where applicable, the specification mandates behaviors using **MUST**, **SHOULD**, and **MAY** semantics.
+## Prototype Status Risk
 
+**Risk:** Q-Cap can be mistaken for a hardened security product or stable file format.
 
+**Current mitigation:** README and docs now describe the repository as a local prototype / MVP demo.
 
-## **Immutability & Version Proliferation**
+**Remaining work:** Publish a stable spec only after canonical serialization, identity, trust anchors, revocation freshness, path grammar, and registry behavior are defined.
 
-### **Risk**
+## Capability Signer Trust
 
-Q-Capsules are immutable by design. Any modification results in a new Merkle root and a new capsule. This may lead to proliferation of capsule versions, complicating governance and distribution.
+**Risk:** A capability signed by an arbitrary key could authorize access if issuer trust is not checked.
 
-### **Mitigations**
+**Current mitigation:** `qcap open` now requires the capability signer public key to match the archive manifest signer public key.
 
-* Capsule minting tools **SHOULD** embed explicit `version`, `parent_root`, and `created_at` metadata in the Provenance TLV.
-* Producers **SHOULD** maintain external or in-capsule lineage manifests.
-* Consumer tools **MUST** display version lineage when present.
+**Remaining work:** Replace the single-signer shortcut with a real Trust Anchor model that can support multiple authorized issuers.
 
+## Capability Token Serialization
 
+**Risk:** Current capability signing uses a delimiter string (`cap_root|allow|expires`). This is fragile and not a stable protocol format.
 
-## **Capability Token Mismanagement**
+**Current mitigation:** The docs now label this as prototype serialization.
 
-### **Risk**
+**Remaining work:** Define canonical structured signing, likely with deterministic JSON, CBOR, or a standard token envelope.
 
-Loss, duplication, or mishandling of capability tokens may grant unintended access.
+## Path Authorization
 
-### **Mitigations**
+**Risk:** Path authorization is simple prefix/suffix/exact matching. Ambiguous path rules can become authorization bugs.
 
-* Capability tokens **MUST** be cryptographically tied to the capsule’s Merkle root via the `qcap_root` field.
-* Tokens **MUST** include expiration timestamps.
-* Tokens **SHOULD** be signed only by issuer keys stored within hardware-backed secure environments (e.g., HSMs or TPMs).
-* Capsules **MUST** reject tokens whose signatures do not validate against Trust Anchors.
+**Current mitigation:** Payload writes reject absolute paths, parent-directory components, root components, platform prefixes, and empty paths.
 
+**Remaining work:** Define a formal path grammar, escaping rules, Unicode normalization, case-sensitivity, deny precedence, and edge-case tests.
 
+## Cryptographic Compartmentalization
 
-## **Compromise of Issuer Keys**
+**Risk:** The sealed package currently uses one content key. Path-scoped capabilities control CLI export, not cryptographic per-path access.
 
-### **Risk**
+**Current mitigation:** Docs now describe current behavior as capability-gated export for intended recipients.
 
-If an issuer’s private key is compromised, unauthorized tokens may be minted.
+**Remaining work:** Decide whether Q-Cap needs hard per-path cryptographic least privilege. If yes, implement per-file keys, per-policy keys, or another compartmentalized key hierarchy.
 
-### **Mitigations**
+## Manifest Authenticity
 
-* Capsules **SHOULD** list Trust Anchors with expiry or revocation metadata.
-* Trust Anchor rotation **MUST** occur via append-only TLV updates.
-* Consumers **MUST** fail verification on Trust Anchors marked as expired or revoked.
-* Implementations **SHOULD** support threshold signing (multi-party approval) for high-sensitivity issuers.
+**Risk:** Signing only the Merkle root leaves non-root manifest metadata unauthenticated.
 
+**Current mitigation:** New archives sign serialized manifest bytes, and tests reject manifest metadata tampering.
 
+**Remaining work:** Define canonical serialization so signatures are stable across implementations.
 
-## **Capsule Size & Resource Constraints**
+## Revocation Semantics
 
-### **Risk**
+**Risk:** Revocation is soft and optional. If a caller does not provide a revocation file or URL, revoked tokens are not checked.
 
-Large data shards, indexes, and provenance logs may increase capsule size beyond what is practical for edge or robotic environments.
+**Current mitigation:** Revocation lists are signed, `qcap open` requires the revocation signer to match the archive signer, and `qcap revoke` rejects mismatched issuers.
 
-### **Mitigations**
+**Remaining work:** Define freshness requirements, offline behavior, stale-list behavior, registry validation, and whether some deployments require fail-closed revocation checks.
 
-* Producers **SHOULD** allow generation of selective sub-views to minimize payload size.
-* Data shards **SHOULD** employ columnar compression (zstd/gdeflate).
-* Vector Indexes **MAY** use PQ/INT8 quantization by default.
-* Consumers **SHOULD** support streaming/memory-mapped reads.
+## Development Key Storage
 
+**Risk:** Local identity JSON files store raw private key material.
 
+**Current mitigation:** Docs label identity JSON as development-only.
 
-## **Edge Compute Limitations**
+**Remaining work:** Add encrypted keyfiles, passphrase protection, KMS/HSM integration guidance, key rotation docs, and secret-scanning checks.
 
-### **Risk**
+## Registry Trust
 
-Devices with constrained compute or memory may be unable to run WASM Lenses or kNN search efficiently.
+**Risk:** The Go registry is a development file server but could be mistaken for a trusted provenance service.
 
-### **Mitigations**
+**Current mitigation:** Docs now call it a dev registry and describe what it does not validate.
 
-* Lenses **MUST** declare memory requirements and expected compute cost via the LensInfo ABI.
-* Runtimes **MAY** reject Lenses exceeding device capability.
-* Producers **SHOULD** provide lightweight Lens variants for tactical systems.
-* Vector Index manifests **SHOULD** support reduced-dimension embeddings for constrained devices.
+**Remaining work:** Add upload validation, artifact immutability, namespace control, audit logs, issuer binding, reader auth if needed, durable object storage, and operational monitoring.
 
+## SDK And Ecosystem Claims
 
+**Risk:** The repo can imply SDK maturity that does not exist.
 
-## **Misconfigured Policies or Selectors**
+**Current mitigation:** README and docs state that the TypeScript SDK is a stub and Python is planned.
 
-### **Risk**
+**Remaining work:** Decide MVP SDK scope. At minimum, implement inspect/verify in TypeScript or remove SDK positioning from MVP claims.
 
-Poorly defined Policy Graph rules or overly broad selectors may unintentionally reveal sensitive information.
+## Geospatial Claims
 
-### **Mitigations**
+**Risk:** A one-point GeoPackage fixture can be overread as full geospatial interoperability.
 
-* Policy Graphs **SHOULD** undergo static validation during capsule minting.
-* Producers **SHOULD** apply safe defaults (deny-by-default) for export and high-risk operations.
-* Lenses that output sensitive features **MUST** consume privacy budget where applicable.
-* Tools **MUST** warn when selectors match larger-than-intended subsets.
+**Current mitigation:** Docs describe the current demo as preserving a simple GeoPackage byte-for-byte.
 
+**Remaining work:** Test larger GeoPackages, common GIS tools, rasters, GeoParquet/STAC metadata, and partial verification behavior.
 
+## Supply Chain And Release Assurance
 
-## **Differential Privacy (DP) Budget Exhaustion**
+**Risk:** Security language can imply more release assurance than CI provides.
 
-### **Risk**
+**Current mitigation:** CI now runs Rust tests, Go tests, and the TypeScript stub build.
 
-Repeated DP queries may deplete privacy budgets and block further operations.
+**Remaining work:** Add CodeQL, dependency audit, SBOM generation, Trivy/image scanning if containers are introduced, signed releases, and release provenance.
 
-### **Mitigations**
-
-* Privacy Ledger entries **MUST** accurately record epsilon/delta consumption.
-* DP-enabled Lenses **MUST** fail deterministically when budgets are exhausted.
-* Producers **SHOULD** allocate DP budgets appropriate to intended capsule lifetime.
-* Auditors **MAY** reset or replenish budgets only through minting a new capsule.
-
-
-
-## **Ecosystem Interoperability**
-
-### **Risk**
-
-Without widely available runtimes, capsules may not integrate easily with GIS, ML, or database environments.
-
-### **Mitigations**
-
-* Reference SDKs **SHOULD** be provided for major languages (Rust, Python, C++).
-* Producers **SHOULD** supply a machine-readable Schema Block compatible with Arrow/Parquet metadata.
-* Consumer tools **MAY** implement auto-conversion to interoperable formats (Arrow IPC, GeoParquet).
-
-
-
-## **Cryptographic Vulnerabilities & Algorithm Agility**
-
-### **Risk**
-
-Incorrect crypto implementations, deprecated algorithms, or unmaintained PQ schemes may weaken capsule guarantees.
-
-### **Mitigations**
-
-* Capsules **MUST** state their cryptographic profile (e.g., FIPS, performance, PQ-enabled) in FLAGS.
-* Hashing **MUST** use BLAKE3 (default) or SHA-256/SHA-3 (FIPS profile).
-* Signatures **MUST** use Ed25519 or ECDSA P-256, optionally combined with ML-DSA.
-* Key Encapsulation Mechanisms **SHOULD** support hybrid classical + ML-KEM.
-* Implementations **SHOULD** support algorithm agility through profile negotiation.
-
-
-
-## **Sub-View Trust Boundary Reset**
-
-### **Risk**
-
-Users may incorrectly assume that capability tokens apply to derived capsules.
-
-### **Mitigations**
-
-* Sub-views **MUST** generate a new Merkle root and new Trust Anchor space.
-* Parent capability tokens **MUST NOT** apply to sub-views.
-* Minting tools **MUST** warn users when generating sub-views without embedding new Trust Anchors or local policy.
-
-
-
-## **Weak Upstream Data Governance**
-
-### **Risk**
-
-Capsule integrity does not guarantee correctness or legality of the underlying source data.
-
-### **Mitigations**
-
-* Provenance TLV **SHOULD** contain in-toto style records for preprocessing pipelines.
-* Lenses **MAY** include data quality audits.
-* Capsule producers **SHOULD** follow organizational data governance and classification policies before minting.
-
-
-
-## **Human Factors & Training Requirements**
-
-### **Risk**
-
-Q-Cap introduces unfamiliar concepts (e.g., Merkle DAGs, DP ledgers, policy graphs).
-
-### **Mitigations**
-
-* Implementations **SHOULD** provide UX-friendly inspection tools.
-* Training materials **SHOULD** accompany operational deployments.
-* High-level capsule summaries **SHOULD** be available via `qcap describe`.
-* Organizations **SHOULD** define SOPs for minting, issuing capabilities, and sub-view governance.
-
-
-
-## **Environmental & Tactical Constraints**
-
-### **Risk**
-
-In robotic, drone, or battlefield environments, device failure, partial downloads, or hostile tampering may corrupt capsules.
-
-### **Mitigations**
-
-* Capsules **MUST** verify Merkle roots on ingest.
-* Implementations **MAY** support shard-level error correction (Reed-Solomon).
-* Disconnected nodes **SHOULD** verify Trust Anchors and integrity before mission loading.
-* Devices **SHOULD** reject incomplete or partially transmitted capsules.
-
-
-
-# **Summary**
-
-Q-Cap’s design introduces new capabilities and new governance responsibilities.
-The mitigations above ensure capsules remain:
-
-* secure
-* verifiable
-* privacy-respecting
-* policy-enforcing
-* suitable for contested, air-gapped, and multi-authority environments
-
-…while minimizing operational and cryptographic risks.
+## Future Design Risks
+
+The following ideas remain future design work and should not be represented as implemented:
+
+- embedded Trust Anchors
+- COSE tokens
+- TLV container sections
+- policy graphs
+- deterministic WASM lenses
+- differential privacy budgets
+- vector indexes
+- post-quantum or hybrid cryptography
+- append-only in-capsule updates
+- multi-authority decentralized issuance
