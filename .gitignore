@@ -3,5 +3,7 @@
 /build/
 node_modules/
 dist/
+/services/qcap-registry/qcap-registry
+/services/qcap-registry/qcap-registry.exe
 .DS_Store
 .env
