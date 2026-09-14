@@ -18,7 +18,7 @@ echo "[smoke] Fetching /index.json…"
 INDEX_JSON=$(curl -sS "$BASE_URL/index.json")
 echo "$INDEX_JSON" | (jq . 2>/dev/null || cat)
 
-COUNT=$(echo "$INDEX_JSON" | jq '.artifacts | length' 2>/dev/null || echo "unknown")
+COUNT=$(echo "$INDEX_JSON" | jq 'length' 2>/dev/null || echo "unknown")
 echo "[smoke] Found $COUNT artifacts"
 
 if [ "$COUNT" = "unknown" ]; then
@@ -26,7 +26,7 @@ if [ "$COUNT" = "unknown" ]; then
   exit 0
 fi
 
-FIRST=$(echo "$INDEX_JSON" | jq -r '.artifacts[0].name' 2>/dev/null)
+FIRST=$(echo "$INDEX_JSON" | jq -r '.[0].name' 2>/dev/null)
 if [ -z "$FIRST" ] || [ "$FIRST" = "null" ]; then
   echo "[smoke] No artifacts listed; done"
   exit 0

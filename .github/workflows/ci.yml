@@ -18,7 +18,7 @@ jobs:
       - run: |
           cd services/qcap-registry
           go build ./...
-          go test ./...
+          go test -race ./...
   typescript:
     runs-on: ubuntu-latest
     steps:
@@ -41,3 +41,4 @@ jobs:
         with:
           go-version: "1.21"
       - run: powershell -ExecutionPolicy Bypass -File scripts/demo.ps1
+      - run: powershell -ExecutionPolicy Bypass -File scripts/integration-registry.ps1
