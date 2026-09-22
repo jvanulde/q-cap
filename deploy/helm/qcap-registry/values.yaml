@@ -1,0 +1,58 @@
+replicaCount: 1
+
+image:
+  repository: qcap-registry
+  tag: local
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+auth:
+  # Publishing is unauthenticated when neither existingSecret nor token is set.
+  # Production deployments should use existingSecret rather than committing a token.
+  existingSecret: ""
+  secretKey: token
+  token: ""
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

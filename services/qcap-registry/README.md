@@ -49,3 +49,13 @@ cargo run -p qcap-cli -- fetch-revocations <issuer-public-key> \
 # Smoke test endpoints
 scripts/smoke-registry.sh
 ```
+
+## Container deployment
+
+Build the non-root registry image from this directory:
+
+```sh
+docker build -t qcap-registry:local services/qcap-registry
+```
+
+The image stores persistent state under `/var/lib/qcap`, listens on port 8080, and includes a `/health` container health check. Use the repository's `compose.yaml` for a local single-host deployment or `deploy/helm/qcap-registry` for Kubernetes. See [the deployment guide](../../docs/deployment.md) for secrets, persistence, and production limitations.

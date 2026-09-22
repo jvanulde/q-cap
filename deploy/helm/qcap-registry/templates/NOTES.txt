@@ -1,0 +1,13 @@
+The Q-Cap registry is available inside the cluster at:
+
+  http://{{ include "qcap-registry.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+
+For a local connection:
+
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "qcap-registry.fullname" . }} 8080:{{ .Values.service.port }}
+
+Then open http://127.0.0.1:8080/health.
+{{- if not (or .Values.auth.existingSecret .Values.auth.token) }}
+
+WARNING: publish authentication is disabled. Set auth.existingSecret before exposing this service.
+{{- end }}

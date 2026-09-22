@@ -1,0 +1,8 @@
+.git
+.gitignore
+Dockerfile
+README.md
+seed
+*.test
+qcap-registry
+qcap-registry.exe
