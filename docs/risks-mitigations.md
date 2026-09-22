@@ -56,7 +56,7 @@ This document tracks risks for the current prototype and planned mitigations. It
 
 **Current mitigation:** Revocation lists are signed, `qcap open` requires the revocation signer to match the archive signer, and `qcap revoke` rejects mismatched issuers.
 
-**Remaining work:** Define freshness requirements, offline behavior, stale-list behavior, registry validation, and whether some deployments require fail-closed revocation checks.
+**Remaining work:** Define freshness requirements, offline behavior, stale-list behavior, and whether some deployments require fail-closed revocation checks.
 
 ## Development Key Storage
 
@@ -70,9 +70,9 @@ This document tracks risks for the current prototype and planned mitigations. It
 
 **Risk:** The Go registry is a development file server but could be mistaken for a trusted provenance service.
 
-**Current mitigation:** Docs now call it a dev registry and describe what it does not validate.
+**Current mitigation:** Docs call it a dev registry. Artifact uploads are validated for archive structure, Merkle-root and signature binding, and supported signature formats. Revocation uploads require a valid signature and matching issuer binding. Accepted writes are staged and atomically persisted, while rejected uploads preserve existing artifacts.
 
-**Remaining work:** Add upload validation, artifact immutability, namespace control, audit logs, issuer binding, reader auth if needed, durable object storage, and operational monitoring.
+**Remaining work:** Add artifact immutability for valid overwrites, namespace control, audit logs, reader auth if needed, durable object storage, production trust policy, and operational monitoring.
 
 ## SDK And Ecosystem Claims
 

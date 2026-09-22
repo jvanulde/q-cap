@@ -169,7 +169,7 @@ Each revoked entry contains:
 
 The revocation list signature must validate, and the revocation list public key must match the archive manifest signer public key.
 
-The Go development registry stores and serves revocation documents, but it does not currently validate the document signature or issuer binding on upload.
+The Go development registry validates revocation signatures on upload and requires the revocation document's issuer to match both its signing key and the issuer path in the request.
 
 ## Registry
 
@@ -187,7 +187,9 @@ Implemented behavior:
 
 When `QCAP_REGISTRY_TOKEN` is set, publish endpoints require `Authorization: Bearer <token>`.
 
-The registry does not currently provide production authentication, reader authorization, manifest validation, namespace control, immutability guarantees, audit logs, object storage, Postgres indexing, Redis caching, OIDC, gRPC, or transparency logging.
+Artifact uploads are accepted only when the archive layout, manifest fields, Merkle-root binding, and supported signature format validate. Revocation uploads require a valid signature and matching issuer binding. Accepted uploads and index updates use staged atomic persistence, and rejected uploads do not replace an existing artifact.
+
+The registry does not currently provide production authentication, reader authorization, namespace control, immutability guarantees for valid overwrites, audit logs, object storage, Postgres indexing, Redis caching, OIDC, gRPC, or transparency logging.
 
 ## Compatibility Status
 
