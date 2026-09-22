@@ -144,7 +144,7 @@ Important residual risks remain:
 - Capability token signing uses a delimiter payload, not structured canonical signing.
 - Path caveats use simple matching rules rather than a formal policy grammar.
 - Revocation is optional and freshness is undefined.
-- The registry stores and serves data but does not validate trust semantics on upload.
+- The registry validates archive structure, Merkle-root and signature binding, and signed revocation issuer binding on upload, but it does not establish namespace ownership or a production trust policy.
 - Local identity files store raw private keys.
 - One package content key means path capabilities govern export behavior, not cryptographic separation.
 
@@ -157,7 +157,7 @@ Before broad external use, Q-Cap should have:
 - formal path policy grammar and negative tests
 - revocation freshness and fail-open/fail-closed rules
 - encrypted or externalized private-key storage
-- registry validation and namespace rules
+- registry namespace ownership, immutability, and production trust-policy rules
 - dependency and release assurance checks
 - external cryptographic design review
 
