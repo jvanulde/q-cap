@@ -42,3 +42,36 @@ jobs:
           go-version: "1.21"
       - run: powershell -ExecutionPolicy Bypass -File scripts/demo.ps1
       - run: powershell -ExecutionPolicy Bypass -File scripts/integration-registry.ps1
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+      - name: Build registry image
+        run: docker build -t qcap-registry:test services/qcap-registry
+      - name: Exercise registry container
+        run: |
+          set -euo pipefail
+          container_id=$(docker run --detach --publish 18080:8080 --env QCAP_REGISTRY_TOKEN=test-token qcap-registry:test)
+          trap 'docker logs "$container_id"; docker rm --force "$container_id"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/health > /tmp/qcap-health.json; then
+              grep -q '"status":"ok"' /tmp/qcap-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Validate Compose configuration
+        env:
+          QCAP_REGISTRY_TOKEN: test-token
+        run: docker compose -f compose.yaml config --quiet
+      - name: Validate Helm chart
+        run: |
+          helm lint deploy/helm/qcap-registry --set auth.token=test-token
+          helm template qcap-registry deploy/helm/qcap-registry \
+            --set auth.token=test-token \
+            --set image.repository=qcap-registry \
+            --set image.tag=test > /tmp/qcap-registry.yaml

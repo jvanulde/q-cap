@@ -25,6 +25,7 @@ q-cap/
     qcap-cli/        # Rust CLI for init, pack, seal, verify, inspect, grant, open, revoke, publish/fetch
   services/
     qcap-registry/   # Go dev registry for health, artifact index/download, publish, and revocations
+  deploy/helm/       # Kubernetes Helm chart for the filesystem registry
   sdks/
     ts/              # TypeScript SDK stub
   api/
@@ -227,6 +228,10 @@ QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
 # Optional: smoke test endpoints
 scripts/smoke-registry.sh
 ```
+
+### Deploy the registry
+
+The repository includes a multi-stage container image, Docker Compose configuration, and Kubernetes Helm chart. See [`docs/deployment.md`](docs/deployment.md) for local deployment, secrets, persistent storage, production boundaries, and artifact portability.
 
 ### Build the TS SDK stub
 
