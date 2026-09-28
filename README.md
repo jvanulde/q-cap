@@ -302,7 +302,7 @@ A `.qcap` is currently a **single ZIP file** containing:
   * Prod: cloud KMS / HSM for issuer roots and rotation docs are planned
 * Supply chain:
 
-  * Current CI builds and tests Rust, tests the Go registry, and builds the TypeScript stub. CodeQL, SBOM (Syft), image scanning (Trivy), and signed releases (cosign) are planned.
+  * CI builds and tests Rust, Go, and the TypeScript stub; CodeQL analyzes the source and workflows; Trivy scans the repository and registry image; and Syft publishes SPDX and CycloneDX SBOM artifacts for the image. Signed releases (cosign) are planned.
 
 > **Important:** Q-Cap’s security depends on proper key handling and capability distribution. Never commit secrets; review `SECURITY.md` before enabling external publication.
 

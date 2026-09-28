@@ -94,9 +94,9 @@ This document tracks risks for the current prototype and planned mitigations. It
 
 **Risk:** Security language can imply more release assurance than CI provides.
 
-**Current mitigation:** CI now runs Rust tests, Go tests, and the TypeScript stub build.
+**Current mitigation:** CI runs Rust tests, Go tests, the TypeScript stub build, CodeQL analysis, Trivy repository and registry-image scans, and Syft generation of SPDX and CycloneDX image SBOM artifacts.
 
-**Remaining work:** Add CodeQL, dependency audit, SBOM generation, Trivy/image scanning if containers are introduced, signed releases, and release provenance.
+**Remaining work:** Add dependency audit, signed releases, and release provenance.
 
 ## Future Design Risks
 
