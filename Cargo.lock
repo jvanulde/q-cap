@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "qcap-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "blake3",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "qcap-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "chacha20poly1305",

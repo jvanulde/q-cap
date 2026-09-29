@@ -4,6 +4,8 @@
 
 > Status: **working local prototype / MVP demo** - this repository includes a Rust core library and CLI, a minimal Go dev registry service, and a TypeScript SDK stub. The implemented flow is local and narrow: create development identities, seal encrypted `.qcap` artifacts, verify signed manifests and payload Merkle roots, publish/fetch through the dev registry, grant path-scoped capabilities, open authorized payloads, and optionally block revoked capabilities. It is not yet a hardened security product, stable file format, production registry, or complete SDK ecosystem.
 
+See [CHANGELOG.md](CHANGELOG.md) for release history and compatibility notes.
+
 ---
 
 ## Why Q-Cap?

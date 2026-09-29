@@ -62,15 +62,15 @@ We prefer **coordinated disclosure**. By default we publish an advisory and cred
 
 - Never commit secrets. Use environment or secret stores (GitHub Actions secrets, cloud KMS, parameter stores).
 - Rotate credentials if exposure is suspected.
-- Local private keys must be encrypted (Argon2id) and stored outside the repo.
-- Production issuer keys should live in **KMS/HSM**; document rotation and access controls.
+- Current local identity files contain unencrypted development key material. Keep them outside the repository, restrict access, and do not use them for production secrets. Argon2id-protected keyfiles are planned.
+- Production issuer keys should live in **KMS/HSM** with documented rotation and access controls; that integration is not implemented yet.
 
 ## Cryptography Notes (MVP)
 
 - AEAD: XChaCha20-Poly1305
 - Hash/Merkle: BLAKE3
 - Signatures: ed25519
-- Capabilities: macaroons with caveats (expiry, audience, paths, purpose)
+- Capabilities: signed prototype JSON tokens with expiry, audience, and path caveats. They are not macaroons or COSE tokens.
 
 Changes to these primitives will be announced in the changelog and release notes.
 
@@ -78,4 +78,4 @@ Changes to these primitives will be announced in the changelog and release notes
 
 Security reports are welcome in **English or French**. When describing impacts, consider diverse user contexts (e.g., accessibility, connectivity limits) so we can prioritize effectively.
 
-*Last updated: 2025-09-17*
+*Last updated: 2026-09-28*
