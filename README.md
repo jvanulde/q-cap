@@ -279,6 +279,10 @@ Post-MVP roadmap:
 
 ## Q-Cap format (preview)
 
+The complete implemented wire format, signing inputs, path grammar, trust
+bindings, and compatibility rules are documented in
+[`docs/spec.md`](docs/spec.md).
+
 A `.qcap` is currently a **single ZIP file** containing:
 
 * `manifest.json` — schema version, Merkle root, issuer, recipients, algorithms, and metadata
