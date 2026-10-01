@@ -1,0 +1,416 @@
+name: release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - core/**
+      - services/qcap-registry/**
+      - CHANGELOG.md
+      - docs/release-artifacts.md
+      - README.md
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY_IMAGE: ghcr.io/jvanulde/qcap-registry
+  RUST_VERSION: 1.98.1
+
+jobs:
+  pull-request-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+      - name: Build release CLI
+        run: cargo build --locked --release --package qcap-cli
+      - name: Build registry image
+        run: docker build --tag qcap-registry:release-smoke services/qcap-registry
+
+  validate-release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Validate tag and release metadata
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="$GITHUB_REF_NAME"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must use X.Y.Z: $version" >&2
+            exit 1
+          fi
+
+          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $version already exists; refusing to republish it" >&2
+            exit 1
+          fi
+
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "release tag must point to a commit on canonical main" >&2
+            exit 1
+          }
+
+          mapfile -t rust_versions < <(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "qcap-cli" or .name == "qcap-core") | .version' |
+              sort -u
+          )
+          if [[ ${#rust_versions[@]} -ne 1 || "${rust_versions[0]}" != "$version" ]]; then
+            echo "Rust package versions must equal release tag $version" >&2
+            printf 'found: %s\n' "${rust_versions[@]}" >&2
+            exit 1
+          fi
+
+          typescript_version=$(jq -r '.version' sdks/ts/package.json)
+          if [[ "$typescript_version" != "$version" ]]; then
+            echo "TypeScript package version $typescript_version does not equal release tag $version" >&2
+            exit 1
+          fi
+
+          grep -Fq "## [$version]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no reviewed section for $version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-cli:
+    needs: validate-release
+    if: needs.validate-release.result == 'success'
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: linux-x86_64
+            source: qcap-cli
+            executable: qcap
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: linux-aarch64
+            source: qcap-cli
+            executable: qcap
+            archive: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: windows-x86_64
+            source: qcap-cli.exe
+            executable: qcap.exe
+            archive: zip
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+            asset: macos-x86_64
+            source: qcap-cli
+            executable: qcap
+            archive: tar.gz
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            asset: macos-aarch64
+            source: qcap-cli
+            executable: qcap
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" \
+            --profile minimal \
+            --target "${{ matrix.target }}" \
+            --no-self-update
+          rustup default "$RUST_VERSION"
+      - name: Build CLI
+        run: cargo build --locked --release --package qcap-cli --target ${{ matrix.target }}
+      - name: Package CLI and checksum
+        id: package
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+          SOURCE: ${{ matrix.source }}
+          EXECUTABLE: ${{ matrix.executable }}
+          ARCHIVE_FORMAT: ${{ matrix.archive }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $stage = Join-Path $PWD 'release-stage'
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $stage, $dist | Out-Null
+          $binary = Join-Path $PWD "target/$env:TARGET/release/$env:SOURCE"
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $stage $env:EXECUTABLE)
+
+          $base = "qcap-$env:VERSION-$env:ASSET"
+          if ($env:ARCHIVE_FORMAT -eq 'zip') {
+            $archive = Join-Path $dist "$base.zip"
+            Compress-Archive -LiteralPath (Join-Path $stage $env:EXECUTABLE) -DestinationPath $archive
+          } else {
+            if (-not $IsWindows) { chmod +x (Join-Path $stage $env:EXECUTABLE) }
+            $archive = Join-Path $dist "$base.tar.gz"
+            tar -czf $archive -C $stage $env:EXECUTABLE
+          }
+
+          $assetName = Split-Path -Leaf $archive
+          $checksum = "$archive.sha256"
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          "$digest  $assetName" | Set-Content -Encoding ascii -NoNewline -LiteralPath $checksum
+
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+          "spdx=$archive.spdx.json" >> $env:GITHUB_OUTPUT
+          "cyclonedx=$archive.cyclonedx.json" >> $env:GITHUB_OUTPUT
+          "bundle=$archive.sigstore.json" >> $env:GITHUB_OUTPUT
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          file: ${{ steps.package.outputs.archive }}
+          format: spdx-json
+          output-file: ${{ steps.package.outputs.spdx }}
+          syft-version: v1.52.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          file: ${{ steps.package.outputs.archive }}
+          format: cyclonedx-json
+          output-file: ${{ steps.package.outputs.cyclonedx }}
+          syft-version: v1.52.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Sign CLI archive with GitHub OIDC
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          BUNDLE: ${{ steps.package.outputs.bundle }}
+        run: cosign sign-blob "$ARCHIVE" --bundle "$BUNDLE" --yes
+      - name: Attest CLI provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+      - name: Attest CLI SPDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+          sbom-path: ${{ steps.package.outputs.spdx }}
+      - name: Attest CLI CycloneDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+          sbom-path: ${{ steps.package.outputs.cyclonedx }}
+      - name: Upload CLI release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-cli-${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.spdx }}
+            ${{ steps.package.outputs.cyclonedx }}
+            ${{ steps.package.outputs.bundle }}
+
+  publish-container:
+    needs: validate-release
+    if: needs.validate-release.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing image version
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        shell: bash
+        run: |
+          if docker buildx imagetools inspect "${REGISTRY_IMAGE}:${VERSION}" >/dev/null 2>&1; then
+            echo "image ${REGISTRY_IMAGE}:${VERSION} already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
+      - name: Build and push multi-architecture registry image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/qcap-registry
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:${{ needs.validate-release.outputs.version }}
+            ${{ env.REGISTRY_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Sign image digest with GitHub OIDC
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: cosign sign --yes "${REGISTRY_IMAGE}@${DIGEST}"
+      - name: Generate image SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.REGISTRY_IMAGE }}@${{ steps.image.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: qcap-registry-${{ needs.validate-release.outputs.version }}.spdx.json
+          syft-version: v1.52.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate image CycloneDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.REGISTRY_IMAGE }}@${{ steps.image.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: cyclonedx-json
+          output-file: qcap-registry-${{ needs.validate-release.outputs.version }}.cyclonedx.json
+          syft-version: v1.52.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - name: Attest image SPDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: qcap-registry-${{ needs.validate-release.outputs.version }}.spdx.json
+          push-to-registry: true
+      - name: Attest image CycloneDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: qcap-registry-${{ needs.validate-release.outputs.version }}.cyclonedx.json
+          push-to-registry: true
+      - name: Record immutable image digest
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: printf '%s@%s\n' "$REGISTRY_IMAGE" "$DIGEST" > "qcap-registry-${VERSION}.digest.txt"
+      - name: Upload container release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-container
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            qcap-registry-${{ needs.validate-release.outputs.version }}.digest.txt
+            qcap-registry-${{ needs.validate-release.outputs.version }}.spdx.json
+            qcap-registry-${{ needs.validate-release.outputs.version }}.cyclonedx.json
+
+  publish-release:
+    needs:
+      - validate-release
+      - build-cli
+      - publish-container
+    if: needs.validate-release.result == 'success' && needs.build-cli.result == 'success' && needs.publish-container.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $VERSION already exists; refusing to replace assets" >&2
+            exit 1
+          fi
+
+          awk -v version="$VERSION" '
+            BEGIN { target = "## [" version "]" }
+            index($0, target) == 1 { capture = 1 }
+            capture && index($0, "## [") == 1 && index($0, target) != 1 { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+          mapfile -d '' assets < <(find dist -type f -print0)
+          test "${#assets[@]}" -gt 0
+          prerelease=()
+          if [[ "$VERSION" == 0.* ]]; then
+            prerelease+=(--prerelease)
+          fi
+          gh release create "$VERSION" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$VERSION" \
+            --notes-file release-notes.md \
+            "${prerelease[@]}"
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,assets,url
