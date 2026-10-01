@@ -62,7 +62,7 @@ The intended direction is an artifact-centric data governance format: portable p
 
 To get there, the next major work should focus on:
 
-- a real format specification
+- a stable, post-preview format specification
 - continued threat-model review as implementation changes
 - canonical signing rules
 - a trust-anchor model
