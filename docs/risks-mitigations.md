@@ -94,9 +94,9 @@ This document tracks risks for the current prototype and planned mitigations. It
 
 **Risk:** Security language can imply more release assurance than CI provides.
 
-**Current mitigation:** CI runs Rust tests, Go tests, the TypeScript stub build, CodeQL analysis, Trivy repository and registry-image scans, and Syft generation of SPDX and CycloneDX image SBOM artifacts.
+**Current mitigation:** CI runs Rust tests, Go tests, the TypeScript stub build, CodeQL analysis, Trivy repository and registry-image scans, and Syft generation of SPDX and CycloneDX image SBOM artifacts. Canonical release tags build checksummed native CLI archives and a multi-architecture registry image, generate release SBOMs, sign artifacts by digest with keyless Cosign, and publish GitHub provenance/SBOM attestations.
 
-**Remaining work:** Add dependency audit, signed releases, and release provenance.
+**Remaining work:** Add dependency auditing, verify the first live tagged run end to end, and enforce artifact verification in downstream deployment policy where appropriate.
 
 ## Future Design Risks
 

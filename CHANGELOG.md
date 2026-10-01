@@ -6,6 +6,10 @@ Q-Cap follows [Semantic Versioning](https://semver.org/). Releases before 1.0 ma
 
 ## [Unreleased]
 
+### Added
+
+- Automated tagged-release builds for native CLI archives and the multi-architecture registry image, including SHA-256 checksums, SPDX/CycloneDX SBOMs, keyless Cosign signatures, and GitHub provenance/SBOM attestations.
+
 ## [0.2.0] - 2026-09-28
 
 This is a pre-release milestone for the working local prototype. The `.qcap` format, CLI output, registry API, and SDK interfaces are not yet stable.
@@ -33,5 +37,5 @@ This is a pre-release milestone for the working local prototype. The `.qcap` for
 - The TypeScript package is a stub, and Python bindings are not implemented.
 - Release signing and provenance are not yet implemented.
 
-[Unreleased]: https://github.com/jvanulde/q-cap/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/jvanulde/q-cap/compare/0.1.0...v0.2.0
+[Unreleased]: https://github.com/jvanulde/q-cap/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/jvanulde/q-cap/compare/0.1.0...0.2.0
