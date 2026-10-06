@@ -43,23 +43,23 @@ First verify the checksum from the directory containing the archive and its
 `.sha256` file:
 
 ```bash
-sha256sum --check qcap-0.2.1-linux-x86_64.tar.gz.sha256
+sha256sum --check qcap-0.3.0-linux-x86_64.tar.gz.sha256
 ```
 
 Then verify the Sigstore bundle. Replace the version and platform as needed:
 
 ```bash
-cosign verify-blob qcap-0.2.1-linux-x86_64.tar.gz \
-  --bundle qcap-0.2.1-linux-x86_64.tar.gz.sigstore.json \
+cosign verify-blob qcap-0.3.0-linux-x86_64.tar.gz \
+  --bundle qcap-0.3.0-linux-x86_64.tar.gz.sigstore.json \
   --certificate-identity \
-    https://github.com/jvanulde/q-cap/.github/workflows/release.yml@refs/tags/0.2.1 \
+    https://github.com/jvanulde/q-cap/.github/workflows/release.yml@refs/tags/0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 Verify GitHub build provenance independently:
 
 ```bash
-gh attestation verify qcap-0.2.1-linux-x86_64.tar.gz \
+gh attestation verify qcap-0.3.0-linux-x86_64.tar.gz \
   --repo jvanulde/q-cap
 ```
 
@@ -77,7 +77,7 @@ image=ghcr.io/jvanulde/qcap-registry@sha256:<digest>
 
 cosign verify "$image" \
   --certificate-identity \
-    https://github.com/jvanulde/q-cap/.github/workflows/release.yml@refs/tags/0.2.1 \
+    https://github.com/jvanulde/q-cap/.github/workflows/release.yml@refs/tags/0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 gh attestation verify "oci://$image" --repo jvanulde/q-cap
