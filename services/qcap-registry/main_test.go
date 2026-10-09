@@ -38,6 +38,53 @@ func TestPublishRequiresBearerTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestPublishRejectsPathLikeArtifactName(t *testing.T) {
+	dir := t.TempDir()
+	reg := &Registry{
+		StoreDir:  dir,
+		IndexPath: filepath.Join(dir, "index.json"),
+	}
+
+	for _, name := range []string{"../escape.qcap", `..\escape.qcap`, "/escape.qcap", `C:\escape.qcap`} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/artifacts", strings.NewReader("not read"))
+			req.Header.Set("X-Qcap-Name", name)
+			rec := httptest.NewRecorder()
+			reg.publish(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected bad request for %q, got %d: %s", name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("invalid names wrote files to the store: %v", entries)
+	}
+}
+
+func TestPathSegmentsRejectTraversalAndSeparators(t *testing.T) {
+	for _, value := range []string{"..", "../issuer", `..\issuer`, "nested/issuer", `nested\issuer`, "/issuer"} {
+		if got := safeArtifactName(value); got != "" {
+			t.Errorf("safeArtifactName(%q) = %q, want empty", value, got)
+		}
+		if got := safePathSegment(value); got != "" {
+			t.Errorf("safePathSegment(%q) = %q, want empty", value, got)
+		}
+	}
+
+	if got := safeArtifactName(" demo.qcap "); got != "demo.qcap" {
+		t.Fatalf("safeArtifactName trimmed valid name to %q", got)
+	}
+	if got := safePathSegment("issuer-01"); got != "issuer-01" {
+		t.Fatalf("safePathSegment rejected valid issuer: %q", got)
+	}
+}
+
 func TestPublishPersistsIndex(t *testing.T) {
 	dir := t.TempDir()
 	reg := &Registry{

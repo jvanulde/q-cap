@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -348,8 +348,7 @@ fn seal(input_dir: &Path, out: &Path, issuer_path: &Path, recipient_path: &Path)
 
     let issuer: Identity = read_json(issuer_path)?;
     let recipient: Identity = read_json(recipient_path)?;
-    let mut content_key = [0u8; 32];
-    OsRng.fill_bytes(&mut content_key);
+    let content_key: [u8; 32] = XChaCha20Poly1305::generate_key(&mut OsRng).into();
     let package_id = random_id();
 
     let tmp = tempdir()?;
@@ -360,8 +359,7 @@ fn seal(input_dir: &Path, out: &Path, issuer_path: &Path, recipient_path: &Path)
     for abs in walk_files(input_dir)? {
         let rel = rel_path(input_dir, &abs)?;
         let plaintext = fs::read(&abs)?;
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
+        let nonce: [u8; 24] = XChaCha20Poly1305::generate_nonce(&mut OsRng).into();
         let ciphertext = encrypt(&content_key, &nonce, rel.as_bytes(), &plaintext)?;
         let dest = encrypted_root.join(&rel);
         if let Some(parent) = dest.parent() {
@@ -945,8 +943,7 @@ fn wrap_content_key(
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
     let shared = ephemeral_secret.diffie_hellman(&recipient_public);
     let wrap_key = derive_wrap_key(shared.as_bytes(), package_id);
-    let mut nonce = [0u8; 24];
-    OsRng.fill_bytes(&mut nonce);
+    let nonce: [u8; 24] = XChaCha20Poly1305::generate_nonce(&mut OsRng).into();
     let wrapped = encrypt(&wrap_key, &nonce, package_id.as_bytes(), key)?;
     Ok(RecipientStanza {
         recipient: recipient.encryption_public_key.clone(),
@@ -971,12 +968,8 @@ fn unwrap_content_key(
     let nonce = decode_24(&stanza.nonce, "recipient nonce")?;
     let wrapped = hex::decode(&stanza.wrapped_key)?;
     let key = decrypt(&wrap_key, &nonce, package_id.as_bytes(), &wrapped)?;
-    if key.len() != 32 {
-        return Err("unwrapped content key has wrong length".into());
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&key);
-    Ok(out)
+    key.try_into()
+        .map_err(|_| "unwrapped content key has wrong length".into())
 }
 
 fn encrypt(key: &[u8; 32], nonce: &[u8; 24], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
@@ -1047,22 +1040,18 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 fn decode_32(value: &str, label: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(value)?;
-    if bytes.len() != 32 {
-        return Err(format!("{label} must be 32 bytes").into());
+    match bytes.try_into() {
+        Ok(out) => Ok(out),
+        Err(_) => Err(format!("{label} must be 32 bytes").into()),
     }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 fn decode_24(value: &str, label: &str) -> Result<[u8; 24]> {
     let bytes = hex::decode(value)?;
-    if bytes.len() != 24 {
-        return Err(format!("{label} must be 24 bytes").into());
+    match bytes.try_into() {
+        Ok(out) => Ok(out),
+        Err(_) => Err(format!("{label} must be 24 bytes").into()),
     }
-    let mut out = [0u8; 24];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
