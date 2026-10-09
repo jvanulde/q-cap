@@ -308,7 +308,7 @@ A `.qcap` is currently a **single ZIP file** containing:
   * Prod: cloud KMS / HSM for issuer roots and rotation docs are planned
 * Supply chain:
 
-  * CI builds and tests Rust, Go, and the TypeScript stub; CodeQL analyzes the source and workflows; Trivy scans the repository and registry image; and Syft publishes SPDX and CycloneDX SBOM artifacts. Tagged releases after `0.2.0` publish checksummed CLI archives and a multi-architecture registry image with keyless Cosign signatures and GitHub provenance/SBOM attestations.
+  * CI builds and tests Rust, Go, and the TypeScript stub; CodeQL analyzes the source and workflows; Trivy scans the repository and registry image; and Syft publishes SPDX and CycloneDX SBOM artifacts. Workflow tokens default to read-only repository access, and third-party actions are pinned to immutable commits. Tagged releases after `0.2.0` publish checksummed CLI archives and a multi-architecture registry image with keyless Cosign signatures and GitHub provenance/SBOM attestations.
 
 > **Important:** Q-Cap’s security depends on proper key handling and capability distribution. Never commit secrets; review `SECURITY.md` before enabling external publication.
 
