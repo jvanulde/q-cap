@@ -268,9 +268,13 @@ func (r *Registry) publish(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	name := safeArtifactName(req.Header.Get("X-Qcap-Name"))
-	if name == "" {
+	rawName := req.Header.Get("X-Qcap-Name")
+	name := safeArtifactName(rawName)
+	if strings.TrimSpace(rawName) == "" {
 		name = "artifact.qcap"
+	} else if name == "" {
+		http.Error(w, "invalid artifact name", http.StatusBadRequest)
+		return
 	}
 	if filepath.Ext(name) != ".qcap" {
 		name += ".qcap"
@@ -422,10 +426,8 @@ func revocationIssuerFromPath(path string) string {
 }
 
 func safeArtifactName(raw string) string {
-	name := filepath.Base(strings.TrimSpace(raw))
-	name = strings.ReplaceAll(name, "\\", "_")
-	name = strings.ReplaceAll(name, "/", "_")
-	if name == "." || name == string(filepath.Separator) {
+	name := strings.TrimSpace(raw)
+	if name == "" || !filepath.IsLocal(name) || filepath.Base(name) != name || strings.ContainsAny(name, `/\\`) {
 		return ""
 	}
 	return name
@@ -433,10 +435,7 @@ func safeArtifactName(raw string) string {
 
 func safePathSegment(raw string) string {
 	name := strings.TrimSpace(raw)
-	name = strings.ReplaceAll(name, "\\", "_")
-	name = strings.ReplaceAll(name, "/", "_")
-	name = strings.ReplaceAll(name, "..", "_")
-	if name == "." || name == "" {
+	if name == "" || !filepath.IsLocal(name) || filepath.Base(name) != name || strings.ContainsAny(name, `/\\`) || strings.Contains(name, "..") {
 		return ""
 	}
 	return name

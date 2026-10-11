@@ -15,6 +15,10 @@ This is a pre-release milestone for the working prototype. The `.qcap` format, C
 - A formal preview specification for archive layout, manifest profiles, signing inputs, encryption and key wrapping, capabilities, revocations, path matching, trust bindings, validation order, and compatibility limits.
 - Automated tagged-release builds for native CLI archives and the multi-architecture registry image, including SHA-256 checksums, SPDX/CycloneDX SBOMs, keyless Cosign signatures, and GitHub provenance/SBOM attestations.
 
+### Changed
+
+- Hardened registry path validation, removed ambiguous path-like artifact-name rewriting, generated cryptographic buffers without hard-coded initial values, restricted CI tokens to read-only access, pinned CI actions and container bases, and updated the registry builder to a patched Go toolchain.
+
 ### Known limitations
 
 - Local identity files contain unencrypted development key material; Argon2id-protected keyfiles and KMS/HSM integration are not implemented.
