@@ -1342,8 +1342,7 @@ fn derive_identity_key(passphrase: &str, kdf: &IdentityKdf) -> Result<[u8; 32]> 
     let params = Params::new(kdf.memory_kib, kdf.iterations, kdf.parallelism, Some(32))
         .map_err(|err| format!("invalid identity KDF parameters: {err}"))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
+    let mut key: [u8; 32] = XChaCha20Poly1305::generate_key(&mut OsRng).into();
     argon2
         .hash_password_into(passphrase.as_bytes(), &salt, &mut key)
         .map_err(|err| format!("identity key derivation failed: {err}"))?;
