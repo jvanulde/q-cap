@@ -1369,7 +1369,7 @@ fn write_identity(path: &Path, identity: &Identity) -> Result<()> {
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
