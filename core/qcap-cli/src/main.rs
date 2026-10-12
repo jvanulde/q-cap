@@ -1,8 +1,11 @@
 use std::fs;
-use std::io::Read;
+#[cfg(unix)]
+use std::io::Write;
+use std::io::{IsTerminal, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use clap::{Parser, Subcommand};
@@ -19,9 +22,18 @@ use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
 use walkdir::WalkDir;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use zip::read::ZipArchive;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+const IDENTITY_FORMAT: &str = "qcap-encrypted-identity-v1";
+const IDENTITY_CIPHER: &str = "xchacha20poly1305";
+const IDENTITY_KDF: &str = "argon2id";
+const ARGON2_VERSION: u32 = 19;
+const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
+const ARGON2_ITERATIONS: u32 = 3;
+const ARGON2_PARALLELISM: u32 = 4;
 
 #[derive(Parser)]
 #[command(name = "qcap", version, about = "Q-Cap CLI (MVP)")]
@@ -40,6 +52,8 @@ enum Commands {
         out: PathBuf,
         #[arg(long = "name", default_value = "local")]
         name: String,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Pack a plaintext directory into a signed .qcap archive
     Pack {
@@ -48,6 +62,8 @@ enum Commands {
         out: PathBuf,
         #[arg(short = 'k', long = "key")]
         key: PathBuf,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Seal a directory into an encrypted .qcap archive for a recipient
     Seal {
@@ -58,6 +74,8 @@ enum Commands {
         issuer: PathBuf,
         #[arg(long = "recipient")]
         recipient: PathBuf,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Verify a .qcap archive
     Verify { file: PathBuf },
@@ -78,6 +96,8 @@ enum Commands {
         issuer: PathBuf,
         #[arg(short = 'o', long = "out")]
         out: PathBuf,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Open a .qcap after verifying a capability token, exporting allowed payload
     Open {
@@ -92,6 +112,8 @@ enum Commands {
         revocations_url: Option<String>,
         #[arg(short = 'o', long = "out")]
         out: PathBuf,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Revoke a capability token by adding it to a signed revocation list
     Revoke {
@@ -103,6 +125,8 @@ enum Commands {
         out: PathBuf,
         #[arg(long = "reason", default_value = "revoked")]
         reason: String,
+        #[arg(long = "passphrase-file", value_name = "PATH")]
+        passphrase_file: Option<PathBuf>,
     },
     /// Publish a .qcap to a registry
     Publish {
@@ -147,11 +171,49 @@ enum Commands {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Identity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
     name: String,
-    signing_seed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signing_seed: Option<String>,
     signing_public_key: String,
-    encryption_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encryption_secret: Option<String>,
     encryption_public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kdf: Option<IdentityKdf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encrypted_private_keys: Option<EncryptedPrivateKeys>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct IdentityKdf {
+    algorithm: String,
+    version: u32,
+    memory_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+    salt: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct EncryptedPrivateKeys {
+    algorithm: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+struct PrivateKeyMaterial {
+    signing_seed: String,
+    encryption_secret: String,
+}
+
+impl Drop for Identity {
+    fn drop(&mut self) {
+        self.signing_seed.zeroize();
+        self.encryption_secret.zeroize();
+    }
 }
 
 fn main() {
@@ -167,9 +229,14 @@ fn run() -> Result<()> {
         Commands::Hash { input } => {
             println!("{}", qcap_core::merkle_root_demo(input.as_bytes()));
         }
-        Commands::Init { out, name } => {
-            let identity = Identity::generate(name);
-            write_json(&out, &identity)?;
+        Commands::Init {
+            out,
+            name,
+            passphrase_file,
+        } => {
+            let passphrase = read_passphrase(passphrase_file.as_deref(), true)?;
+            let identity = Identity::generate(name, &passphrase)?;
+            write_identity(&out, &identity)?;
             println!(
                 "Identity created\n- id: {}\n- out: {}",
                 identity.id(),
@@ -180,13 +247,21 @@ fn run() -> Result<()> {
             input_dir,
             out,
             key,
-        } => pack_plain(&input_dir, &out, &key)?,
+            passphrase_file,
+        } => pack_plain(&input_dir, &out, &key, passphrase_file.as_deref())?,
         Commands::Seal {
             input_dir,
             out,
             issuer,
             recipient,
-        } => seal(&input_dir, &out, &issuer, &recipient)?,
+            passphrase_file,
+        } => seal(
+            &input_dir,
+            &out,
+            &issuer,
+            &recipient,
+            passphrase_file.as_deref(),
+        )?,
         Commands::Verify { file } => {
             let report = verify_archive(&file)?;
             println!(
@@ -206,7 +281,17 @@ fn run() -> Result<()> {
             expires,
             issuer,
             out,
-        } => grant(&file, &allow, &path, &audience, &expires, &issuer, &out)?,
+            passphrase_file,
+        } => grant(
+            &file,
+            &allow,
+            &path,
+            &audience,
+            &expires,
+            &issuer,
+            &out,
+            passphrase_file.as_deref(),
+        )?,
         Commands::Open {
             file,
             cap,
@@ -214,6 +299,7 @@ fn run() -> Result<()> {
             revocations,
             revocations_url,
             out,
+            passphrase_file,
         } => open_archive(
             &file,
             &cap,
@@ -221,13 +307,15 @@ fn run() -> Result<()> {
             revocations.as_deref(),
             revocations_url.as_deref(),
             &out,
+            passphrase_file.as_deref(),
         )?,
         Commands::Revoke {
             cap,
             issuer,
             out,
             reason,
-        } => revoke(&cap, &issuer, &out, &reason)?,
+            passphrase_file,
+        } => revoke(&cap, &issuer, &out, &reason, passphrase_file.as_deref())?,
         Commands::Publish {
             file,
             registry,
@@ -255,33 +343,75 @@ fn run() -> Result<()> {
 }
 
 impl Identity {
-    fn generate(name: String) -> Self {
+    fn generate(name: String, passphrase: &str) -> Result<Self> {
+        if passphrase.is_empty() {
+            return Err("identity passphrase must not be empty".into());
+        }
         let mut signing_seed = [0u8; 32];
         OsRng.fill_bytes(&mut signing_seed);
         let signing = SigningKey::from_bytes(&signing_seed);
 
         let enc_secret = StaticSecret::random_from_rng(OsRng);
         let enc_public = PublicKey::from(&enc_secret);
-
-        Self {
-            name,
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut salt);
+        let nonce: [u8; 24] = XChaCha20Poly1305::generate_nonce(&mut OsRng).into();
+        let kdf = IdentityKdf {
+            algorithm: IDENTITY_KDF.to_string(),
+            version: ARGON2_VERSION,
+            memory_kib: ARGON2_MEMORY_KIB,
+            iterations: ARGON2_ITERATIONS,
+            parallelism: ARGON2_PARALLELISM,
+            salt: hex::encode(salt),
+        };
+        let material = PrivateKeyMaterial {
             signing_seed: hex::encode(signing_seed),
-            signing_public_key: hex::encode(signing.verifying_key().to_bytes()),
             encryption_secret: hex::encode(enc_secret.to_bytes()),
+        };
+        let mut identity = Self {
+            format: Some(IDENTITY_FORMAT.to_string()),
+            name,
+            signing_seed: None,
+            signing_public_key: hex::encode(signing.verifying_key().to_bytes()),
+            encryption_secret: None,
             encryption_public_key: hex::encode(enc_public.to_bytes()),
-        }
+            kdf: Some(kdf),
+            encrypted_private_keys: None,
+        };
+        let encryption_key = Zeroizing::new(derive_identity_key(
+            passphrase,
+            identity.kdf.as_ref().unwrap(),
+        )?);
+        let plaintext = Zeroizing::new(serde_json::to_vec(&material)?);
+        let ciphertext = encrypt(
+            &encryption_key,
+            &nonce,
+            &identity.associated_data(),
+            &plaintext,
+        )?;
+        signing_seed.zeroize();
+        identity.encrypted_private_keys = Some(EncryptedPrivateKeys {
+            algorithm: IDENTITY_CIPHER.to_string(),
+            nonce: hex::encode(nonce),
+            ciphertext: hex::encode(ciphertext),
+        });
+        Ok(identity)
     }
 
-    fn signing_key(&self) -> Result<SigningKey> {
-        let bytes = decode_32(&self.signing_seed, "signing_seed")?;
-        Ok(SigningKey::from_bytes(&bytes))
+    fn signing_key(&self, passphrase: Option<&str>) -> Result<SigningKey> {
+        let material = self.private_key_material(passphrase)?;
+        let mut bytes = decode_32(&material.signing_seed, "signing_seed")?;
+        let key = SigningKey::from_bytes(&bytes);
+        bytes.zeroize();
+        Ok(key)
     }
 
-    fn encryption_secret(&self) -> Result<StaticSecret> {
-        Ok(StaticSecret::from(decode_32(
-            &self.encryption_secret,
-            "encryption_secret",
-        )?))
+    fn encryption_secret(&self, passphrase: Option<&str>) -> Result<StaticSecret> {
+        let material = self.private_key_material(passphrase)?;
+        let mut bytes = decode_32(&material.encryption_secret, "encryption_secret")?;
+        let secret = StaticSecret::from(bytes);
+        bytes.zeroize();
+        Ok(secret)
     }
 
     fn encryption_public(&self) -> Result<PublicKey> {
@@ -293,6 +423,86 @@ impl Identity {
 
     fn id(&self) -> String {
         self.signing_public_key.chars().take(16).collect()
+    }
+
+    fn is_encrypted(&self) -> bool {
+        self.format.as_deref() == Some(IDENTITY_FORMAT)
+    }
+
+    fn associated_data(&self) -> Vec<u8> {
+        format!(
+            "{IDENTITY_FORMAT}\0{}\0{}\0{}",
+            self.name, self.signing_public_key, self.encryption_public_key
+        )
+        .into_bytes()
+    }
+
+    fn private_key_material(&self, passphrase: Option<&str>) -> Result<PrivateKeyMaterial> {
+        if !self.is_encrypted() {
+            if self.format.is_some() || self.kdf.is_some() || self.encrypted_private_keys.is_some()
+            {
+                return Err("unsupported or malformed identity format".into());
+            }
+            let material = PrivateKeyMaterial {
+                signing_seed: self
+                    .signing_seed
+                    .clone()
+                    .ok_or("legacy identity missing signing_seed")?,
+                encryption_secret: self
+                    .encryption_secret
+                    .clone()
+                    .ok_or("legacy identity missing encryption_secret")?,
+            };
+            self.validate_private_keys(&material)?;
+            return Ok(material);
+        }
+        if self.signing_seed.is_some() || self.encryption_secret.is_some() {
+            return Err("encrypted identity must not contain plaintext private keys".into());
+        }
+        let passphrase = passphrase.ok_or("encrypted identity requires a passphrase")?;
+        let kdf = self
+            .kdf
+            .as_ref()
+            .ok_or("encrypted identity missing KDF parameters")?;
+        let encrypted = self
+            .encrypted_private_keys
+            .as_ref()
+            .ok_or("encrypted identity missing private-key ciphertext")?;
+        if encrypted.algorithm != IDENTITY_CIPHER {
+            return Err("unsupported identity cipher".into());
+        }
+        let nonce = decode_24(&encrypted.nonce, "identity nonce")?;
+        let ciphertext = hex::decode(&encrypted.ciphertext)?;
+        let encryption_key = Zeroizing::new(derive_identity_key(passphrase, kdf)?);
+        let plaintext = decrypt(
+            &encryption_key,
+            &nonce,
+            &self.associated_data(),
+            &ciphertext,
+        )
+        .map_err(|_| "unable to unlock identity (wrong passphrase or corrupted keyfile)")?;
+        let plaintext = Zeroizing::new(plaintext);
+        let material: PrivateKeyMaterial = serde_json::from_slice(&plaintext)
+            .map_err(|_| "encrypted identity contains invalid private-key material")?;
+        self.validate_private_keys(&material)?;
+        Ok(material)
+    }
+
+    fn validate_private_keys(&self, material: &PrivateKeyMaterial) -> Result<()> {
+        let mut signing_seed = decode_32(&material.signing_seed, "signing_seed")?;
+        let signing = SigningKey::from_bytes(&signing_seed);
+        if hex::encode(signing.verifying_key().to_bytes()) != self.signing_public_key {
+            signing_seed.zeroize();
+            return Err("identity signing key does not match its public key".into());
+        }
+        signing_seed.zeroize();
+        let mut encryption_secret = decode_32(&material.encryption_secret, "encryption_secret")?;
+        let secret = StaticSecret::from(encryption_secret);
+        encryption_secret.zeroize();
+        if hex::encode(PublicKey::from(&secret).to_bytes()) != self.encryption_public_key {
+            return Err("identity encryption key does not match its public key".into());
+        }
+        Ok(())
     }
 }
 
@@ -325,10 +535,15 @@ struct RevocationEntry {
     reason: String,
 }
 
-fn pack_plain(input_dir: &Path, out: &Path, key: &Path) -> Result<()> {
+fn pack_plain(
+    input_dir: &Path,
+    out: &Path,
+    key: &Path,
+    passphrase_file: Option<&Path>,
+) -> Result<()> {
     let root = compute_payload_merkle_root(input_dir)?;
     let manifest = QcapManifest::new_with_now("0.1.0", &root, None, serde_json::json!({}));
-    let signing_key = signing_key_from_seed_file(key)?;
+    let signing_key = signing_key_from_file(key, passphrase_file)?;
     let manifest_bytes = manifest.to_json_bytes()?;
     let sig_bundle = sign_manifest(&manifest_bytes, &root, &signing_key);
     create_qcap_archive_with_signature(input_dir, &manifest, &sig_bundle, out)?;
@@ -341,13 +556,20 @@ fn pack_plain(input_dir: &Path, out: &Path, key: &Path) -> Result<()> {
     Ok(())
 }
 
-fn seal(input_dir: &Path, out: &Path, issuer_path: &Path, recipient_path: &Path) -> Result<()> {
+fn seal(
+    input_dir: &Path,
+    out: &Path,
+    issuer_path: &Path,
+    recipient_path: &Path,
+    passphrase_file: Option<&Path>,
+) -> Result<()> {
     if !input_dir.is_dir() {
         return Err(format!("input_dir is not a directory: {}", input_dir.display()).into());
     }
 
     let issuer: Identity = read_json(issuer_path)?;
     let recipient: Identity = read_json(recipient_path)?;
+    let issuer_passphrase = identity_passphrase(&issuer, passphrase_file)?;
     let content_key: [u8; 32] = XChaCha20Poly1305::generate_key(&mut OsRng).into();
     let package_id = random_id();
 
@@ -386,7 +608,11 @@ fn seal(input_dir: &Path, out: &Path, issuer_path: &Path, recipient_path: &Path)
         recipients,
     );
     let manifest_bytes = manifest.to_json_bytes()?;
-    let sig = sign_manifest(&manifest_bytes, &merkle_root, &issuer.signing_key()?);
+    let sig = sign_manifest(
+        &manifest_bytes,
+        &merkle_root,
+        &issuer.signing_key(issuer_passphrase.as_ref().map(|value| value.as_str()))?,
+    );
 
     create_qcap_archive_with_signature(&encrypted_root, &manifest, &sig, out)?;
     println!(
@@ -408,15 +634,17 @@ fn grant(
     expires: &str,
     issuer_path: &Path,
     out: &Path,
+    passphrase_file: Option<&Path>,
 ) -> Result<()> {
     let report = verify_archive(file)?;
     let issuer: Identity = read_json(issuer_path)?;
+    let issuer_passphrase = identity_passphrase(&issuer, passphrase_file)?;
     let allow_spec = format!("{allow};path={path};aud={audience}");
     let cap = CapabilityToken::grant(
         &report.manifest.merkle_root,
         &allow_spec,
         expires,
-        &issuer.signing_key()?,
+        &issuer.signing_key(issuer_passphrase.as_ref().map(|value| value.as_str()))?,
     );
     write_json(out, &cap)?;
     println!(
@@ -431,11 +659,18 @@ fn grant(
     Ok(())
 }
 
-fn revoke(cap_path: &Path, issuer_path: &Path, out: &Path, reason: &str) -> Result<()> {
+fn revoke(
+    cap_path: &Path,
+    issuer_path: &Path,
+    out: &Path,
+    reason: &str,
+    passphrase_file: Option<&Path>,
+) -> Result<()> {
     let cap: CapabilityToken = read_json(cap_path)?;
     cap.verify()?;
     let issuer: Identity = read_json(issuer_path)?;
-    let signing_key = issuer.signing_key()?;
+    let issuer_passphrase = identity_passphrase(&issuer, passphrase_file)?;
+    let signing_key = issuer.signing_key(issuer_passphrase.as_ref().map(|value| value.as_str()))?;
     let issuer_public_key = hex::encode(signing_key.verifying_key().to_bytes());
     if cap.public_key != issuer_public_key {
         return Err("revocation issuer does not match capability signer".into());
@@ -484,6 +719,7 @@ fn open_archive(
     revocations_path: Option<&Path>,
     revocations_url: Option<&str>,
     out: &Path,
+    passphrase_file: Option<&Path>,
 ) -> Result<()> {
     let report = verify_archive(file)?;
     let identity: Identity = read_json(identity_path)?;
@@ -514,10 +750,19 @@ fn open_archive(
     }
     enforce_expiry(&cap.expires)?;
 
-    fs::create_dir_all(out)?;
     if report.manifest.encrypted {
-        open_encrypted(file, &report.manifest, &identity, &access, out)?;
+        let identity_passphrase = identity_passphrase(&identity, passphrase_file)?;
+        fs::create_dir_all(out)?;
+        open_encrypted(
+            file,
+            &report.manifest,
+            &identity,
+            identity_passphrase.as_ref().map(|value| value.as_str()),
+            &access,
+            out,
+        )?;
     } else {
+        fs::create_dir_all(out)?;
         open_plain(file, &access, out)?;
     }
     println!("Open: OK\n- exported to: {}", out.display());
@@ -528,6 +773,7 @@ fn open_encrypted(
     file: &Path,
     manifest: &QcapManifest,
     identity: &Identity,
+    passphrase: Option<&str>,
     access: &Access,
     out: &Path,
 ) -> Result<()> {
@@ -540,7 +786,7 @@ fn open_encrypted(
         .iter()
         .find(|r| r.recipient == identity.encryption_public_key)
         .ok_or("identity is not a recipient for this archive")?;
-    let content_key = unwrap_content_key(stanza, package_id, identity)?;
+    let content_key = unwrap_content_key(stanza, package_id, identity, passphrase)?;
 
     let f = fs::File::open(file)?;
     let mut zip = ZipArchive::new(f)?;
@@ -958,12 +1204,15 @@ fn unwrap_content_key(
     stanza: &RecipientStanza,
     package_id: &str,
     identity: &Identity,
+    passphrase: Option<&str>,
 ) -> Result<[u8; 32]> {
     let ephemeral = PublicKey::from(decode_32(
         &stanza.ephemeral_public_key,
         "ephemeral_public_key",
     )?);
-    let shared = identity.encryption_secret()?.diffie_hellman(&ephemeral);
+    let shared = identity
+        .encryption_secret(passphrase)?
+        .diffie_hellman(&ephemeral);
     let wrap_key = derive_wrap_key(shared.as_bytes(), package_id);
     let nonce = decode_24(&stanza.nonce, "recipient nonce")?;
     let wrapped = hex::decode(&stanza.wrapped_key)?;
@@ -1021,9 +1270,83 @@ fn read_signature(zip: &mut ZipArchive<fs::File>) -> Result<QcapSignatureBundle>
     Ok(serde_json::from_str(&s)?)
 }
 
-fn signing_key_from_seed_file(path: &Path) -> Result<SigningKey> {
-    let key_hex = fs::read_to_string(path)?;
+fn signing_key_from_file(path: &Path, passphrase_file: Option<&Path>) -> Result<SigningKey> {
+    let bytes = fs::read(path)?;
+    if bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        == Some(b'{')
+    {
+        let identity: Identity = serde_json::from_slice(&bytes)?;
+        let passphrase = identity_passphrase(&identity, passphrase_file)?;
+        return identity.signing_key(passphrase.as_ref().map(|value| value.as_str()));
+    }
+    let key_hex = std::str::from_utf8(&bytes)?;
     Ok(SigningKey::from_bytes(&decode_32(key_hex.trim(), "seed")?))
+}
+
+fn identity_passphrase(
+    identity: &Identity,
+    passphrase_file: Option<&Path>,
+) -> Result<Option<Zeroizing<String>>> {
+    if identity.is_encrypted() {
+        Ok(Some(read_passphrase(passphrase_file, false)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_passphrase(path: Option<&Path>, confirm: bool) -> Result<Zeroizing<String>> {
+    let passphrase = if let Some(path) = path {
+        let value = fs::read_to_string(path)?;
+        Zeroizing::new(value.trim_end_matches(['\r', '\n']).to_string())
+    } else if let Ok(value) = std::env::var("QCAP_KEY_PASSPHRASE") {
+        Zeroizing::new(value)
+    } else {
+        if !std::io::stdin().is_terminal() {
+            return Err(
+                "identity passphrase required; use --passphrase-file or QCAP_KEY_PASSPHRASE".into(),
+            );
+        }
+        let value = Zeroizing::new(rpassword::prompt_password("Identity passphrase: ")?);
+        if confirm {
+            let confirmation =
+                Zeroizing::new(rpassword::prompt_password("Confirm identity passphrase: ")?);
+            if *value != *confirmation {
+                return Err("identity passphrases do not match".into());
+            }
+        }
+        value
+    };
+    if passphrase.is_empty() {
+        return Err("identity passphrase must not be empty".into());
+    }
+    Ok(passphrase)
+}
+
+fn derive_identity_key(passphrase: &str, kdf: &IdentityKdf) -> Result<[u8; 32]> {
+    if kdf.algorithm != IDENTITY_KDF || kdf.version != ARGON2_VERSION {
+        return Err("unsupported identity KDF".into());
+    }
+    if !(8 * 1024..=1024 * 1024).contains(&kdf.memory_kib)
+        || !(1..=10).contains(&kdf.iterations)
+        || !(1..=16).contains(&kdf.parallelism)
+    {
+        return Err("identity KDF parameters are outside supported limits".into());
+    }
+    let salt = hex::decode(&kdf.salt)?;
+    if salt.len() != 16 {
+        return Err("identity KDF salt must be 16 bytes".into());
+    }
+    let params = Params::new(kdf.memory_kib, kdf.iterations, kdf.parallelism, Some(32))
+        .map_err(|err| format!("invalid identity KDF parameters: {err}"))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key: [u8; 32] = XChaCha20Poly1305::generate_key(&mut OsRng).into();
+    argon2
+        .hash_password_into(passphrase.as_bytes(), &salt, &mut key)
+        .map_err(|err| format!("identity key derivation failed: {err}"))?;
+    Ok(key)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -1035,6 +1358,31 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    Ok(())
+}
+
+fn write_identity(path: &Path, identity: &Identity) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(identity)?;
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(&bytes)?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)?;
+    }
     Ok(())
 }
 
@@ -1202,4 +1550,40 @@ fn glob_match(pattern: &str, candidate: &str) -> bool {
         return candidate.ends_with(suffix);
     }
     false
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_plaintext_identity_remains_readable() {
+        let signing_seed = [7u8; 32];
+        let signing = SigningKey::from_bytes(&signing_seed);
+        let encryption_secret = StaticSecret::from([9u8; 32]);
+        let encryption_public = PublicKey::from(&encryption_secret);
+        let identity = Identity {
+            format: None,
+            name: "legacy".to_string(),
+            signing_seed: Some(hex::encode(signing_seed)),
+            signing_public_key: hex::encode(signing.verifying_key().to_bytes()),
+            encryption_secret: Some(hex::encode(encryption_secret.to_bytes())),
+            encryption_public_key: hex::encode(encryption_public.to_bytes()),
+            kdf: None,
+            encrypted_private_keys: None,
+        };
+
+        assert_eq!(
+            identity
+                .signing_key(None)
+                .unwrap()
+                .verifying_key()
+                .to_bytes(),
+            signing.verifying_key().to_bytes()
+        );
+        assert_eq!(
+            PublicKey::from(&identity.encryption_secret(None).unwrap()).to_bytes(),
+            encryption_public.to_bytes()
+        );
+    }
 }

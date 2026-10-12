@@ -60,11 +60,11 @@ This document tracks risks for the current prototype and planned mitigations. It
 
 ## Development Key Storage
 
-**Risk:** Local identity JSON files store raw private key material.
+**Risk:** Local private keys can be exposed by stolen keyfiles, weak passphrases, plaintext legacy identities, raw seed files, or a compromised host.
 
-**Current mitigation:** Docs label identity JSON as development-only.
+**Current mitigation:** New identity files encrypt private key material with an Argon2id-derived key and XChaCha20-Poly1305. The CLI accepts hidden interactive input or an access-controlled passphrase file, authenticates public identity metadata, checks decrypted private/public key consistency, and bounds stored KDF parameters before allocating memory. Legacy plaintext identities remain readable for migration.
 
-**Remaining work:** Add encrypted keyfiles, passphrase protection, KMS/HSM integration guidance, key rotation docs, and secret-scanning checks.
+**Remaining work:** Add an in-place legacy migration command, KMS/HSM integration guidance, key rotation docs, secret-scanning checks, and platform-specific secure-storage integrations.
 
 ## Registry Trust
 
