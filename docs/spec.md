@@ -515,7 +515,7 @@ tree, or evaluate capabilities.
 - Path matching is a minimal string matcher, not a general glob language.
 - One content key protects the entire sealed payload.
 - Revocation lookup is optional and has no freshness or rollback protection.
-- Local identity files contain unencrypted private key material.
+- Newly generated local identity files encrypt private key material with Argon2id and XChaCha20-Poly1305. Legacy plaintext identities and raw signing-seed inputs remain accepted for compatibility; the local keyfile format is outside the portable `.qcap` archive format.
 - The registry is a single-replica development service without production
   reader authorization, namespaces, immutable valid uploads, or audit logs.
 - The Rust CLI and Go registry do not yet have identical legacy-signature or

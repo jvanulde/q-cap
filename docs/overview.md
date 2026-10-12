@@ -54,7 +54,7 @@ The MVP uses:
 - There is no embedded Trust Anchor model yet.
 - Current capability tokens are not macaroons and are not COSE tokens.
 - There is no DP budget, policy graph, WASM lens runtime, vector index, or post-quantum/hybrid crypto implementation.
-- Local identity JSON files contain raw development key material and are not production key storage.
+- New local identity files encrypt private key material with Argon2id and XChaCha20-Poly1305; legacy plaintext identities remain readable for migration. Local keyfiles are still not a replacement for KMS/HSM-backed production key storage. See [encrypted identity keyfiles](keyfiles.md).
 
 ## Direction
 

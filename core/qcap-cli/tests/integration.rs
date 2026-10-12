@@ -14,10 +14,107 @@ fn write_seed_hex(path: &PathBuf) {
     .unwrap();
 }
 
-fn write_identity_seed(identity_path: &PathBuf, seed_path: &PathBuf) {
+fn qcap_command() -> Command {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"));
+    command.env("QCAP_KEY_PASSPHRASE", "integration-test-passphrase");
+    command
+}
+
+#[test]
+fn init_encrypts_private_keys_and_rejects_wrong_passphrase() {
+    let tmp = tempdir().unwrap();
+    let identity = tmp.path().join("identity.json");
+    let payload = tmp.path().join("payload");
+    let archive = tmp.path().join("archive.qcap");
+    let tampered_identity = tmp.path().join("tampered-identity.json");
+    fs::create_dir_all(&payload).unwrap();
+    fs::write(payload.join("data.txt"), b"protected").unwrap();
+
+    qcap_command()
+        .args([
+            "init",
+            "--name",
+            "encrypted",
+            "--out",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
     let identity_json: serde_json::Value =
-        serde_json::from_slice(&fs::read(identity_path).unwrap()).unwrap();
-    fs::write(seed_path, identity_json["signing_seed"].as_str().unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(&identity).unwrap()).unwrap();
+    assert_eq!(
+        identity_json["format"],
+        serde_json::json!("qcap-encrypted-identity-v1")
+    );
+    assert!(identity_json.get("signing_seed").is_none());
+    assert!(identity_json.get("encryption_secret").is_none());
+    assert_eq!(identity_json["kdf"]["algorithm"], "argon2id");
+    assert_eq!(identity_json["kdf"]["memory_kib"], 65536);
+    assert_eq!(identity_json["kdf"]["iterations"], 3);
+    assert_eq!(identity_json["kdf"]["parallelism"], 4);
+
+    qcap_command()
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            archive.to_str().unwrap(),
+            "--key",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mut wrong_passphrase = Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"));
+    wrong_passphrase
+        .env("QCAP_KEY_PASSPHRASE", "wrong-passphrase")
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            tmp.path().join("wrong.qcap").to_str().unwrap(),
+            "--key",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unable to unlock identity"));
+
+    let mut tampered_json = identity_json;
+    tampered_json["name"] = serde_json::json!("tampered");
+    fs::write(
+        &tampered_identity,
+        serde_json::to_vec_pretty(&tampered_json).unwrap(),
+    )
+    .unwrap();
+    qcap_command()
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            tmp.path().join("tampered.qcap").to_str().unwrap(),
+            "--key",
+            tampered_identity.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unable to unlock identity"));
+
+    let mut no_passphrase = Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"));
+    no_passphrase
+        .env_remove("QCAP_KEY_PASSPHRASE")
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            tmp.path().join("no-passphrase.qcap").to_str().unwrap(),
+            "--key",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("identity passphrase required"));
 }
 
 #[test]
@@ -34,7 +131,7 @@ fn pack_then_verify_ok() {
     write_seed_hex(&seed);
 
     // Pack
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "pack",
             payload.to_str().unwrap(),
@@ -49,7 +146,7 @@ fn pack_then_verify_ok() {
     assert!(out.exists(), "qcap created");
 
     // Verify
-    let verify = Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    let verify = qcap_command()
         .args(["verify", out.to_str().unwrap()])
         .assert()
         .success()
@@ -76,7 +173,7 @@ fn verify_fails_on_tamper() {
     write_seed_hex(&seed);
 
     // Pack
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "pack",
             payload.to_str().unwrap(),
@@ -155,7 +252,7 @@ fn verify_fails_on_tamper() {
         zw.finish().unwrap();
     }
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args(["verify", tampered.to_str().unwrap()])
         .assert()
         .failure();
@@ -171,13 +268,12 @@ fn grant_and_open_flow() {
     fs::write(payload.join("b.bin"), [1u8, 2, 3, 4]).unwrap();
 
     let out_qcap = root.join("demo.qcap");
-    let seed = root.join("seed.hex");
     let cap = root.join("cap.json");
     let issuer = root.join("issuer.identity.json");
     let identity = root.join("recipient.identity.json");
     let export_dir = root.join("exported");
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -187,7 +283,7 @@ fn grant_and_open_flow() {
         ])
         .assert()
         .success();
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -197,26 +293,25 @@ fn grant_and_open_flow() {
         ])
         .assert()
         .success();
-    write_identity_seed(&issuer, &seed);
     let identity_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&identity).unwrap()).unwrap();
     let audience = identity_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
 
     // Pack
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "pack",
             payload.to_str().unwrap(),
             "--out",
             out_qcap.to_str().unwrap(),
             "--key",
-            seed.to_str().unwrap(),
+            issuer.to_str().unwrap(),
         ])
         .assert()
         .success();
 
     // Grant
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "grant",
             out_qcap.to_str().unwrap(),
@@ -236,7 +331,7 @@ fn grant_and_open_flow() {
     assert!(cap.exists(), "cap token created");
 
     // Open
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "open",
             out_qcap.to_str().unwrap(),
@@ -262,14 +357,13 @@ fn revoked_capability_blocks_open() {
     fs::write(payload.join("a.txt"), b"hello").unwrap();
 
     let out_qcap = root.join("demo.qcap");
-    let seed = root.join("seed.hex");
     let cap = root.join("cap.json");
     let revocations = root.join("revocations.json");
     let issuer = root.join("issuer.identity.json");
     let identity = root.join("recipient.identity.json");
     let export_dir = root.join("exported");
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -279,7 +373,7 @@ fn revoked_capability_blocks_open() {
         ])
         .assert()
         .success();
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -289,24 +383,23 @@ fn revoked_capability_blocks_open() {
         ])
         .assert()
         .success();
-    write_identity_seed(&issuer, &seed);
     let identity_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&identity).unwrap()).unwrap();
     let audience = identity_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "pack",
             payload.to_str().unwrap(),
             "--out",
             out_qcap.to_str().unwrap(),
             "--key",
-            seed.to_str().unwrap(),
+            issuer.to_str().unwrap(),
         ])
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "grant",
             out_qcap.to_str().unwrap(),
@@ -324,7 +417,7 @@ fn revoked_capability_blocks_open() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "revoke",
             "--cap",
@@ -340,7 +433,7 @@ fn revoked_capability_blocks_open() {
         .success();
     assert!(revocations.exists(), "revocation list created");
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "open",
             out_qcap.to_str().unwrap(),
@@ -374,7 +467,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
     let export_dir = root.join("exported");
     let geopackage = payload.join("reports/observations.gpkg");
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -384,7 +477,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
         ])
         .assert()
         .success();
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "init",
             "--name",
@@ -395,7 +488,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args(["sample-geopackage", "--out", geopackage.to_str().unwrap()])
         .assert()
         .success();
@@ -410,7 +503,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
         serde_json::from_slice(&fs::read(&recipient).unwrap()).unwrap();
     let audience = recipient_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "seal",
             payload.to_str().unwrap(),
@@ -424,7 +517,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "grant",
             qcap.to_str().unwrap(),
@@ -440,7 +533,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "open",
             qcap.to_str().unwrap(),
@@ -483,7 +576,7 @@ fn open_rejects_capability_from_untrusted_signer() {
         ("recipient", &recipient),
         ("attacker", &attacker),
     ] {
-        Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        qcap_command()
             .args(["init", "--name", name, "--out", path.to_str().unwrap()])
             .assert()
             .success();
@@ -493,7 +586,7 @@ fn open_rejects_capability_from_untrusted_signer() {
         serde_json::from_slice(&fs::read(&recipient).unwrap()).unwrap();
     let audience = recipient_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "seal",
             payload.to_str().unwrap(),
@@ -507,7 +600,7 @@ fn open_rejects_capability_from_untrusted_signer() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "grant",
             qcap.to_str().unwrap(),
@@ -521,7 +614,7 @@ fn open_rejects_capability_from_untrusted_signer() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "open",
             qcap.to_str().unwrap(),
@@ -556,7 +649,7 @@ fn revoke_rejects_issuer_that_did_not_sign_capability() {
         ("recipient", &recipient),
         ("attacker", &attacker),
     ] {
-        Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        qcap_command()
             .args(["init", "--name", name, "--out", path.to_str().unwrap()])
             .assert()
             .success();
@@ -566,7 +659,7 @@ fn revoke_rejects_issuer_that_did_not_sign_capability() {
         serde_json::from_slice(&fs::read(&recipient).unwrap()).unwrap();
     let audience = recipient_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "seal",
             payload.to_str().unwrap(),
@@ -580,7 +673,7 @@ fn revoke_rejects_issuer_that_did_not_sign_capability() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "grant",
             qcap.to_str().unwrap(),
@@ -594,7 +687,7 @@ fn revoke_rejects_issuer_that_did_not_sign_capability() {
         .assert()
         .success();
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "revoke",
             "--cap",
@@ -621,7 +714,7 @@ fn verify_rejects_tampered_manifest_metadata() {
     let seed = root.join("seed.hex");
     write_seed_hex(&seed);
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args([
             "pack",
             payload.to_str().unwrap(),
@@ -635,7 +728,7 @@ fn verify_rejects_tampered_manifest_metadata() {
 
     rewrite_manifest_title(&out, &tampered, "tampered title");
 
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    qcap_command()
         .args(["verify", tampered.to_str().unwrap()])
         .assert()
         .failure();

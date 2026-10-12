@@ -12,6 +12,7 @@ $Cap = Join-Path $Work "cap.json"
 $Revocations = Join-Path $Work "revocations.json"
 $Issuer = Join-Path $Work "issuer.identity.json"
 $Recipient = Join-Path $Work "recipient.identity.json"
+$PassphraseFile = Join-Path $Work "identity.passphrase"
 $GeoPackage = Join-Path $Payload "reports\observations.gpkg"
 $RegistryOut = Join-Path $Work "registry.out.log"
 $RegistryErr = Join-Path $Work "registry.err.log"
@@ -63,6 +64,7 @@ New-Item -ItemType Directory -Force $Payload, $RegistryDir | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $Payload "reports"), (Join-Path $Payload "secrets") | Out-Null
 Set-Content -NoNewline -Path (Join-Path $Payload "reports\summary.txt") -Value "Q-Cap MVP: this report is allowed."
 Set-Content -NoNewline -Path (Join-Path $Payload "secrets\private.txt") -Value "This should stay blocked by the capability."
+Set-Content -NoNewline -Path $PassphraseFile -Value "qcap-demo-passphrase"
 
 Push-Location $Root
 $registryProcess = $null
@@ -71,8 +73,8 @@ try {
   Run $CargoExe @("build", "--workspace", "--quiet")
 
   Step "creating issuer and recipient identities"
-  Run $QcapExe @("init", "--name", "issuer", "--out", $Issuer)
-  Run $QcapExe @("init", "--name", "recipient", "--out", $Recipient)
+  Run $QcapExe @("init", "--name", "issuer", "--out", $Issuer, "--passphrase-file", $PassphraseFile)
+  Run $QcapExe @("init", "--name", "recipient", "--out", $Recipient, "--passphrase-file", $PassphraseFile)
   $issuerIdentity = Get-Content -Raw $Issuer | ConvertFrom-Json
   $issuerRevocationsUrl = "http://127.0.0.1:8080/revocations/$($issuerIdentity.signing_public_key)/revocations.json"
   $recipientIdentity = Get-Content -Raw $Recipient | ConvertFrom-Json
@@ -82,7 +84,7 @@ try {
   Run $QcapExe @("sample-geopackage", "--out", $GeoPackage)
 
   Step "sealing encrypted .qcap"
-  Run $QcapExe @("seal", $Payload, "--issuer", $Issuer, "--recipient", $Recipient, "--out", $DemoQcap)
+  Run $QcapExe @("seal", $Payload, "--issuer", $Issuer, "--recipient", $Recipient, "--out", $DemoQcap, "--passphrase-file", $PassphraseFile)
   Run $QcapExe @("verify", $DemoQcap)
   Run $QcapExe @("inspect", $DemoQcap)
 
@@ -104,13 +106,13 @@ try {
   Run $QcapExe @("verify", $Fetched)
 
   Step "proving open fails without a capability"
-  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", (Join-Path $Work "missing-cap.json"), "--identity", $Recipient, "--out", $Exported) "OK blocked open without capability"
+  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", (Join-Path $Work "missing-cap.json"), "--identity", $Recipient, "--out", $Exported, "--passphrase-file", $PassphraseFile) "OK blocked open without capability"
 
   Step "granting capability for reports/* only"
-  Run $QcapExe @("grant", $Fetched, "--issuer", $Issuer, "--audience", $recipientAudience, "--path", "reports/*", "--expires", "unix-seconds:9999999999", "--out", $Cap)
+  Run $QcapExe @("grant", $Fetched, "--issuer", $Issuer, "--audience", $recipientAudience, "--path", "reports/*", "--expires", "unix-seconds:9999999999", "--out", $Cap, "--passphrase-file", $PassphraseFile)
 
   Step "opening with capability"
-  Run $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--out", $Exported)
+  Run $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--out", $Exported, "--passphrase-file", $PassphraseFile)
   if (!(Test-Path (Join-Path $Exported "reports\summary.txt"))) {
     throw "allowed report was not exported"
   }
@@ -127,9 +129,9 @@ try {
   }
 
   Step "revoking capability and proving it is blocked"
-  Run $QcapExe @("revoke", "--cap", $Cap, "--issuer", $Issuer, "--reason", "demo-complete", "--out", $Revocations)
+  Run $QcapExe @("revoke", "--cap", $Cap, "--issuer", $Issuer, "--reason", "demo-complete", "--out", $Revocations, "--passphrase-file", $PassphraseFile)
   Run $QcapExe @("publish-revocations", $Revocations, "--registry", "http://127.0.0.1:8080", "--token", "demo-token")
-  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--revocations-url", $issuerRevocationsUrl, "--out", $RevokedExported) "OK blocked revoked capability"
+  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--revocations-url", $issuerRevocationsUrl, "--out", $RevokedExported, "--passphrase-file", $PassphraseFile) "OK blocked revoked capability"
 
   Step "MVP demo complete"
   Write-Host "Allowed output: $(Join-Path $Exported "reports\summary.txt")"

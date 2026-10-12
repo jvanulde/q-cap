@@ -6,6 +6,12 @@ Q-Cap follows [Semantic Versioning](https://semver.org/). Releases before 1.0 ma
 
 ## [Unreleased]
 
+### Added
+
+- Argon2id-protected local identity keyfiles with XChaCha20-Poly1305 encryption,
+  interactive and automation-safe passphrase sources, legacy identity reading,
+  and encrypted-identity support across private-key CLI operations.
+
 ## [0.3.0] - 2026-10-05
 
 This is a pre-release milestone for the working prototype. The `.qcap` format, CLI output, registry API, and SDK interfaces remain unstable. Package SemVer advances independently of the existing `0.1.0` plain and `0.2.0` sealed archive schema versions.
