@@ -62,7 +62,7 @@ We prefer **coordinated disclosure**. By default we publish an advisory and cred
 
 - Never commit secrets. Use environment or secret stores (GitHub Actions secrets, cloud KMS, parameter stores).
 - Rotate credentials if exposure is suspected.
-- Current local identity files contain unencrypted development key material. Keep them outside the repository, restrict access, and do not use them for production secrets. Argon2id-protected keyfiles are planned.
+- New local identity files encrypt private key material with an Argon2id-derived key and XChaCha20-Poly1305. Keep keyfiles and passphrase sources outside the repository, restrict access, and use KMS/HSM-backed keys for production deployments. Legacy plaintext identities and raw `pack --key` seed files remain readable for compatibility and must be migrated or protected separately. See [encrypted identity keyfiles](docs/keyfiles.md).
 - Production issuer keys should live in **KMS/HSM** with documented rotation and access controls; that integration is not implemented yet.
 
 ## Cryptography Notes (MVP)

@@ -18,6 +18,8 @@ try {
     Set-Content -LiteralPath (Join-Path $payloadDir "data.txt") -Value "registry integration" -NoNewline
     $seedPath = Join-Path $tempDir "seed.hex"
     Set-Content -LiteralPath $seedPath -Value "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" -NoNewline
+    $passphrasePath = Join-Path $tempDir "identity.passphrase"
+    Set-Content -LiteralPath $passphrasePath -Value "qcap-integration-passphrase" -NoNewline
 
     Push-Location $repoRoot
     try {
@@ -102,17 +104,17 @@ try {
     $revocations = Join-Path $tempDir "revocations.json"
     $fetchedRevocations = Join-Path $tempDir "fetched-revocations.json"
 
-    & $cli init --name issuer --out $issuer
+    & $cli init --name issuer --out $issuer --passphrase-file $passphrasePath
     if ($LASTEXITCODE -ne 0) { throw "issuer init failed" }
-    & $cli init --name recipient --out $recipient
+    & $cli init --name recipient --out $recipient --passphrase-file $passphrasePath
     if ($LASTEXITCODE -ne 0) { throw "recipient init failed" }
     $recipientIdentity = Get-Content -LiteralPath $recipient -Raw | ConvertFrom-Json
     $audience = $recipientIdentity.signing_public_key.Substring(0, 16)
-    & $cli seal $payloadDir --issuer $issuer --recipient $recipient --out $sealed
+    & $cli seal $payloadDir --issuer $issuer --recipient $recipient --out $sealed --passphrase-file $passphrasePath
     if ($LASTEXITCODE -ne 0) { throw "qcap seal failed" }
-    & $cli grant $sealed --issuer $issuer --audience $audience --out $capability
+    & $cli grant $sealed --issuer $issuer --audience $audience --out $capability --passphrase-file $passphrasePath
     if ($LASTEXITCODE -ne 0) { throw "capability grant failed" }
-    & $cli revoke --cap $capability --issuer $issuer --out $revocations --reason "integration-test"
+    & $cli revoke --cap $capability --issuer $issuer --out $revocations --reason "integration-test" --passphrase-file $passphrasePath
     if ($LASTEXITCODE -ne 0) { throw "capability revoke failed" }
     $revocationList = Get-Content -LiteralPath $revocations -Raw | ConvertFrom-Json
     & $cli publish-revocations $revocations --registry $baseUrl --token "integration-token"

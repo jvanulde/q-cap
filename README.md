@@ -65,7 +65,7 @@ flowchart LR
 
   %% --- Core Library ---
   subgraph Core["qcap-core (Rust)"]
-    CORE["Crypto • Merkle (BLAKE3) • signed capabilities\nAEAD: XChaCha20-Poly1305 • ed25519 • planned Argon2id keyfiles"]
+    CORE["Crypto • Merkle (BLAKE3) • signed capabilities\nAEAD: XChaCha20-Poly1305 • ed25519 • Argon2id keyfiles"]
   end
 
   %% --- Consumers / SDKs ---
@@ -187,6 +187,7 @@ On Windows PowerShell:
 Manual equivalent:
 
 ```bash
+export QCAP_KEY_PASSPHRASE='replace-with-a-strong-passphrase'
 cargo run -p qcap-cli -- init --name issuer --out /tmp/qcap-demo/issuer.identity.json
 cargo run -p qcap-cli -- init --name recipient --out /tmp/qcap-demo/recipient.identity.json
 cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
@@ -202,6 +203,11 @@ cargo run -p qcap-cli -- publish-revocations /tmp/qcap-demo/revocations.json --r
 cargo run -p qcap-cli -- fetch-revocations <issuer-public-key> --out /tmp/qcap-demo/fetched-revocations.json --registry http://127.0.0.1:8080
 cargo run -p qcap-cli -- open /tmp/qcap-demo/fetched.qcap --cap /tmp/qcap-demo/cap.json --identity /tmp/qcap-demo/recipient.identity.json --revocations-url http://127.0.0.1:8080/revocations/<issuer-public-key>/revocations.json --out /tmp/qcap-demo/revoked-exported
 ```
+
+Private identity material is encrypted at rest. Interactive commands prompt
+without echo; automation can use `--passphrase-file` or
+`QCAP_KEY_PASSPHRASE`. See [encrypted identity keyfiles](docs/keyfiles.md) for
+the format, parameter choices, compatibility, and operational guidance.
 
 This is an MVP, not a hardened security product. It uses XChaCha20-Poly1305 for file encryption, X25519-derived wrapping keys for recipients, ed25519 signatures over serialized manifest bytes, and signed capability tokens with enforced expiry, audience, signer, and path constraints.
 
@@ -249,7 +255,7 @@ npm run build
 
 Implemented in the local MVP:
 
-* `qcap init` - local MVP identity/key material and recipient fingerprint.
+* `qcap init` - Argon2id-protected local identity/key material and recipient fingerprint.
 * `qcap pack` - plaintext `.qcap` archive with `manifest.json`, `payload/`, `meta/`, and detached signature.
 * `qcap seal` - per-file XChaCha20-Poly1305 envelope encryption with recipient wrapping.
 * `qcap verify` - signed manifest and payload Merkle verification.
@@ -266,14 +272,14 @@ Before calling this a solid MVP release:
 * Add integration tests for publish/fetch and more edge cases around path filtering, issuer trust, and revoked-token denial.
 * Document the CLI output contract well enough for SDKs and automation to rely on it.
 * Remove generated binaries and cache artifacts from commits; keep the repo source-only.
-* Make security limits explicit: local identity JSON files are development-only, revocation is soft, and registry auth is token-based.
+* Make security limits explicit: local keyfiles are not KMS/HSM-backed production keys, revocation is soft, and registry auth is token-based.
 * Decide whether the TypeScript SDK remains a stub for MVP or must support inspect/verify before release.
 
 Post-MVP roadmap:
 
 * Production registry: REST/gRPC endpoints with OpenAPI, Postgres manifest index, Redis cache, durable object storage, OIDC admin auth, PAT automation, and observability.
 * SDKs: TypeScript/WASM open/inspect/verify in browser/Node and Python/cffi verify/open for data pipelines.
-* Hardening: Argon2id-protected keyfiles, KMS/HSM-backed issuer roots, key rotation docs, dependency auditing, and optional transparency log.
+* Hardening: KMS/HSM-backed issuer roots, key rotation and legacy-key migration tooling, dependency auditing, and optional transparency log.
 
 ---
 
@@ -304,7 +310,7 @@ A `.qcap` is currently a **single ZIP file** containing:
 * Prototype threat model: see `docs/threat-model.md`
 * Keys:
 
-  * Dev: local identity JSON; Argon2id-protected keyfiles are planned
+  * Dev: Argon2id-protected local identity keyfiles; plaintext legacy identities remain readable for migration
   * Prod: cloud KMS / HSM for issuer roots and rotation docs are planned
 * Supply chain:
 
