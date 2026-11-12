@@ -51,4 +51,4 @@ echo "[seed] Done. Seeded capsules:"
 ls -lh "$SEED_DIR"/*.qcap || true
 
 echo "[seed] You can now run the registry:"
-echo "       go run services/qcap-registry/main.go"
+echo "       go -C services/qcap-registry run ."

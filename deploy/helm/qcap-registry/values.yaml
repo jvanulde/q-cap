@@ -16,11 +16,16 @@ service:
   annotations: {}
 
 auth:
-  # Publishing is unauthenticated when neither existingSecret nor token is set.
+  # Publishing is unauthenticated when both legacy token and OIDC are unset.
   # Production deployments should use existingSecret rather than committing a token.
   existingSecret: ""
   secretKey: token
   token: ""
+  oidc:
+    issuer: ""
+    clientID: ""
+    # Comma-separated exact OIDC subject identifiers, not emails or group names.
+    adminSubjects: ""
 
 persistence:
   enabled: true

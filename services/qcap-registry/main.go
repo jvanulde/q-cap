@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -74,6 +75,7 @@ type Registry struct {
 	StoreDir  string
 	IndexPath string
 	Token     string
+	Auth      *registryAuth
 
 	mu    sync.RWMutex
 	Index []Capsule
@@ -93,6 +95,16 @@ func main() {
 		StoreDir:  storeDir,
 		IndexPath: indexPath,
 		Token:     os.Getenv("QCAP_REGISTRY_TOKEN"),
+	}
+	issuer := os.Getenv("QCAP_REGISTRY_OIDC_ISSUER")
+	clientID := os.Getenv("QCAP_REGISTRY_OIDC_CLIENT_ID")
+	adminSubjects := os.Getenv("QCAP_REGISTRY_OIDC_ADMIN_SUBJECTS")
+	if issuer != "" || clientID != "" || adminSubjects != "" {
+		var err error
+		reg.Auth, err = newRegistryAuth(context.Background(), issuer, clientID, adminSubjects, filepath.Join(storeDir, ".auth", "pats.json"), nil)
+		if err != nil {
+			log.Fatalf("could not initialize registry authentication: %v", err)
+		}
 	}
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
 		log.Fatalf("could not create registry store: %v", err)
@@ -116,6 +128,8 @@ func (r *Registry) handler() http.Handler {
 	mux.HandleFunc("/artifacts", r.publish)
 	mux.HandleFunc("/artifacts/", r.artifact)
 	mux.HandleFunc("/revocations/", r.revocations)
+	mux.HandleFunc("/admin/tokens", r.adminTokens)
+	mux.HandleFunc("/admin/tokens/", r.adminTokens)
 	return mux
 }
 
@@ -216,7 +230,7 @@ func (r *Registry) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":        "ok",
-		"auth_required": r.Token != "",
+		"auth_required": r.Token != "" || r.Auth != nil,
 		"artifacts":     artifactCount,
 		"revocations":   r.revocationIssuerCount(),
 	})
@@ -264,7 +278,7 @@ func (r *Registry) publish(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !r.authorized(req) {
+	if !r.authorizedScope(req, scopePublish) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -349,7 +363,7 @@ func (r *Registry) serveRevocations(w http.ResponseWriter, req *http.Request, is
 }
 
 func (r *Registry) publishRevocations(w http.ResponseWriter, req *http.Request, issuer string) {
-	if !r.authorized(req) {
+	if !r.authorizedScope(req, scopeRevoke) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -387,13 +401,6 @@ func (r *Registry) publishRevocations(w http.ResponseWriter, req *http.Request, 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(doc)
-}
-
-func (r *Registry) authorized(req *http.Request) bool {
-	if r.Token == "" {
-		return true
-	}
-	return req.Header.Get("Authorization") == "Bearer "+r.Token
 }
 
 func (r *Registry) revocationPath(issuer string) string {

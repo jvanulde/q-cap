@@ -3,7 +3,7 @@ use crate::signatures::QcapSignatureBundle;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions as FileOptions;
 use zip::ZipWriter;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

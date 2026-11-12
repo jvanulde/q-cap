@@ -74,6 +74,16 @@ We prefer **coordinated disclosure**. By default we publish an advisory and cred
 
 Changes to these primitives will be announced in the changelog and release notes.
 
+## Archive parser maintenance
+
+Rust archive readers and writers require `zip` 9.1.3 or newer (Rust 1.88 or
+newer). This includes the upstream fixes for
+[GHSA-m665-v7pm-7grj](https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj)
+and rejects conflicting ZIP local/central headers. Q-Cap uses random-access
+readers, not streaming extraction; the dependency advisory's severity is not
+evidence of arbitrary code execution in Q-Cap. Valid existing archives retain
+their wire format, signing inputs, and schema versions.
+
 ## Accessibility & Inclusion
 
 Security reports are welcome in **English or French**. When describing impacts, consider diverse user contexts (e.g., accessibility, connectivity limits) so we can prioritize effectively.

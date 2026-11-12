@@ -55,6 +55,12 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            - name: QCAP_REGISTRY_OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: QCAP_REGISTRY_OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientID | quote }}
+            - name: QCAP_REGISTRY_OIDC_ADMIN_SUBJECTS
+              value: {{ .Values.auth.oidc.adminSubjects | quote }}
           readinessProbe:
             httpGet:
               path: /health

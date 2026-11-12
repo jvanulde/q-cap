@@ -212,7 +212,7 @@ fn verify_fails_on_tamper() {
         fs::create_dir_all(&extract_dir).unwrap();
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).unwrap();
-            let name = entry.name().to_string();
+            let name = entry.name().unwrap().into_owned();
             let dest = extract_dir.join(&name);
             if entry.is_dir() {
                 fs::create_dir_all(&dest).ok();
@@ -231,8 +231,8 @@ fn verify_fails_on_tamper() {
         // Repack minimal: rebuild zip from extracted tree
         let file = fs::File::create(&tampered).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         for entry in walkdir::WalkDir::new(&extract_dir)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -734,17 +734,78 @@ fn verify_rejects_tampered_manifest_metadata() {
         .failure();
 }
 
+#[test]
+fn verify_rejects_conflicting_zip_header_names() {
+    let tmp = tempdir().unwrap();
+    let payload = tmp.path().join("payload");
+    fs::create_dir(&payload).unwrap();
+    fs::write(payload.join("a.txt"), b"hello").unwrap();
+    let seed = tmp.path().join("seed.hex");
+    write_seed_hex(&seed);
+    let archive = tmp.path().join("archive.qcap");
+    qcap_command()
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            archive.to_str().unwrap(),
+            "--key",
+            seed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    qcap_command()
+        .args(["verify", archive.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let header_offset = {
+        let mut zip = ZipArchive::new(fs::File::open(&archive).unwrap()).unwrap();
+        let entry = zip.by_name("manifest.json").unwrap();
+        entry.header_start() as usize
+    };
+    let mut bytes = fs::read(&archive).unwrap();
+    // Keep the central-directory name and signed bytes unchanged. Only the
+    // local header disagrees, so signature verification alone cannot catch it.
+    assert_eq!(&bytes[header_offset..header_offset + 4], b"PK\x03\x04");
+    assert_eq!(bytes[header_offset + 30], b'm');
+    bytes[header_offset + 30] = b'x';
+    fs::write(&archive, bytes).unwrap();
+    qcap_command()
+        .args(["verify", archive.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("header inconsistency"));
+}
+
+#[test]
+fn legacy_seed_archives_have_consistent_headers() {
+    for bytes in [
+        include_bytes!("../../../services/qcap-registry/seed/alpha.qcap").as_slice(),
+        include_bytes!("../../../services/qcap-registry/seed/beta.qcap").as_slice(),
+    ] {
+        let mut zip = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        zip.validate_header_consistency().unwrap();
+        let mut manifest = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(&manifest).unwrap();
+    }
+}
+
 fn rewrite_manifest_title(source: &PathBuf, dest: &PathBuf, title: &str) {
     let f = fs::File::open(source).unwrap();
     let mut zip = ZipArchive::new(f).unwrap();
     let out = fs::File::create(dest).unwrap();
     let mut zw = zip::ZipWriter::new(out);
-    let opts =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
 
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().into_owned();
         if entry.is_dir() {
             zw.add_directory(name, opts).unwrap();
             continue;

@@ -790,6 +790,7 @@ fn open_encrypted(
 
     let f = fs::File::open(file)?;
     let mut zip = ZipArchive::new(f)?;
+    zip.validate_header_consistency()?;
     let mut exported = 0usize;
     for spec in &manifest.files {
         if !access.allows_path(&spec.path) {
@@ -816,10 +817,11 @@ fn open_encrypted(
 fn open_plain(file: &Path, access: &Access, out: &Path) -> Result<()> {
     let f = fs::File::open(file)?;
     let mut zip = ZipArchive::new(f)?;
+    zip.validate_header_consistency()?;
     let mut exported = 0usize;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
         if !name.starts_with("payload/") || entry.is_dir() {
             continue;
         }
@@ -841,6 +843,7 @@ fn open_plain(file: &Path, access: &Access, out: &Path) -> Result<()> {
 fn verify_archive(file: &Path) -> Result<VerifyReport> {
     let f = fs::File::open(file)?;
     let mut zip = ZipArchive::new(f)?;
+    zip.validate_header_consistency()?;
     let (manifest, manifest_bytes) = read_manifest(&mut zip)?;
     let signature = read_signature(&mut zip)?;
     verify_manifest_signature(&signature, &manifest_bytes)?;
@@ -849,7 +852,7 @@ fn verify_archive(file: &Path) -> Result<VerifyReport> {
     let mut payload_files = 0usize;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
         if !name.starts_with("payload/") || entry.is_dir() {
             continue;
         }
@@ -1299,7 +1302,8 @@ fn identity_passphrase(
 
 fn read_passphrase(path: Option<&Path>, confirm: bool) -> Result<Zeroizing<String>> {
     let passphrase = if let Some(path) = path {
-        let value = fs::read_to_string(path)?;
+        // Protect the original allocation as well as the trimmed passphrase copy.
+        let value = Zeroizing::new(fs::read_to_string(path)?);
         Zeroizing::new(value.trim_end_matches(['\r', '\n']).to_string())
     } else if let Ok(value) = std::env::var("QCAP_KEY_PASSPHRASE") {
         Zeroizing::new(value)

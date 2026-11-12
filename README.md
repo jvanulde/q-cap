@@ -123,7 +123,7 @@ flowchart LR
 
 * **Git** and **GitHub CLI** (`gh auth login`)
 * **Rust** (stable, MSVC on Windows)
-* **Go** 1.21+
+* **Go** 1.25+ (CI and registry images use patched Go 1.27.3)
 * **Node.js** (optional, for building the TS SDK)
 
 #### Install on Windows (PowerShell)
@@ -193,7 +193,7 @@ cargo run -p qcap-cli -- init --name recipient --out /tmp/qcap-demo/recipient.id
 cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
 cargo run -p qcap-cli -- seal /tmp/qcap-demo/payload --issuer /tmp/qcap-demo/issuer.identity.json --recipient /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/demo.qcap
 cargo run -p qcap-cli -- verify /tmp/qcap-demo/demo.qcap
-QCAP_REGISTRY_SEED=/tmp/qcap-demo/registry QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
+QCAP_REGISTRY_SEED=/tmp/qcap-demo/registry QCAP_REGISTRY_TOKEN=demo-token go -C services/qcap-registry run .
 cargo run -p qcap-cli -- publish /tmp/qcap-demo/demo.qcap --registry http://127.0.0.1:8080 --token demo-token
 cargo run -p qcap-cli -- fetch demo.qcap --out /tmp/qcap-demo/fetched.qcap --registry http://127.0.0.1:8080
 cargo run -p qcap-cli -- grant /tmp/qcap-demo/fetched.qcap --issuer /tmp/qcap-demo/issuer.identity.json --audience <recipient-id> --path "reports/*" --out /tmp/qcap-demo/cap.json
@@ -231,7 +231,7 @@ Quick start:
 scripts/seed-registry.sh
 
 # Run the registry with publish auth
-QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
+QCAP_REGISTRY_STORE=seed QCAP_REGISTRY_TOKEN=demo-token go -C services/qcap-registry run .
 
 # Optional: smoke test endpoints
 scripts/smoke-registry.sh
@@ -277,7 +277,7 @@ Before calling this a solid MVP release:
 
 Post-MVP roadmap:
 
-* Production registry: REST/gRPC endpoints with OpenAPI, Postgres manifest index, Redis cache, durable object storage, OIDC admin auth, PAT automation, and observability.
+* Production registry: REST/gRPC endpoints with OpenAPI, Postgres manifest index, Redis cache, durable object storage, reader authorization, and observability. [OIDC admin API and scoped PAT automation](docs/registry-auth.md) are implemented; interactive browser login and production identity provisioning remain external.
 * SDKs: TypeScript/WASM open/inspect/verify in browser/Node and Python/cffi verify/open for data pipelines.
 * Hardening: KMS/HSM-backed issuer roots, key rotation and legacy-key migration tooling, dependency auditing, and optional transparency log.
 

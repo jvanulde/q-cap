@@ -33,7 +33,20 @@
       "properties": {
         "existingSecret": { "type": "string" },
         "secretKey": { "type": "string", "minLength": 1 },
-        "token": { "type": "string" }
+        "token": { "type": "string" },
+        "oidc": {
+          "type": "object",
+          "required": ["issuer", "clientID", "adminSubjects"],
+          "properties": {
+            "issuer": { "type": "string", "pattern": "^$|^https://" },
+            "clientID": { "type": "string" },
+            "adminSubjects": { "type": "string" }
+          },
+          "oneOf": [
+            { "properties": { "issuer": { "const": "" }, "clientID": { "const": "" }, "adminSubjects": { "const": "" } } },
+            { "properties": { "issuer": { "minLength": 1 }, "clientID": { "minLength": 1 }, "adminSubjects": { "minLength": 1 } } }
+          ]
+        }
       }
     },
     "persistence": {

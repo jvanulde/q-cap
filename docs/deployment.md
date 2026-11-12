@@ -13,7 +13,7 @@ Q-Cap ships a multi-stage registry container, Docker Compose configuration for l
 | `QCAP_REGISTRY_INDEX` | `/var/lib/qcap/index.json` | Persisted JSON index |
 | `QCAP_REGISTRY_TOKEN` | unset | Bearer token required for artifact and revocation publishing |
 
-Reads are public. When `QCAP_REGISTRY_TOKEN` is unset or empty, writes are also unauthenticated. Do not expose an unauthenticated registry to an untrusted network.
+Reads are public. Writes are unauthenticated only when neither OIDC nor `QCAP_REGISTRY_TOKEN` is configured. Do not expose an unauthenticated registry to an untrusted network. See [registry authentication](registry-auth.md) for the OIDC admin API and scoped, expiring PATs.
 
 ## Local deployment with Docker Compose
 
@@ -26,7 +26,7 @@ docker compose up --build -d
 curl http://127.0.0.1:8080/health
 ```
 
-The named volume `qcap-registry-data` persists artifacts, revocations, and `index.json`. Stop the service without deleting data:
+The named volume `qcap-registry-data` persists artifacts, revocations, `index.json`, and OIDC-issued PAT state in `.auth/pats.json`. Stop the service without deleting data:
 
 ```sh
 docker compose down
@@ -76,4 +76,4 @@ The current registry is a hardened prototype, not a horizontally scalable produc
 - Use durable storage with snapshots and test backup/restore procedures for the data volume.
 - Apply network policies so only intended publishers can reach write endpoints.
 - Add logs, metrics, alerting, resource requests/limits, retention policy, and disaster-recovery procedures for your environment.
-- The base chart does not provision S3-compatible storage, Postgres, Redis, OIDC, certificates, ingress, or cloud resources. Those remain separate roadmap items.
+- The chart accepts an existing OIDC issuer through `auth.oidc` but does not provision an identity provider. S3-compatible storage, Postgres, Redis, certificates, ingress, and cloud resources remain external or separate roadmap items.

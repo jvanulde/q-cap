@@ -1,6 +1,6 @@
 # Q-Cap Registry (MVP)
 
-A minimal registry that stores `.qcap` artifacts on disk, persists an `index.json`, serves signed issuer revocation lists, and can require bearer-token auth for publishing. Uploads are staged and validated before atomically replacing stored files.
+A minimal registry that stores `.qcap` artifacts on disk, persists an `index.json`, serves signed issuer revocation lists, and supports OIDC-administered scoped PATs or a legacy shared bearer token for publishing. Uploads are staged and validated before atomically replacing stored files. See [registry authentication](../../docs/registry-auth.md) for setup, token lifecycle, and limits.
 
 Artifact validation checks the ZIP layout, safe entry paths, required manifest fields, manifest/signature Merkle-root binding, and Ed25519 signature. Both legacy `ed25519` root signatures and current `ed25519:manifest` signatures are accepted. Revocation uploads must contain a valid Ed25519 signature and their `public_key` must match the issuer URL.
 
@@ -13,6 +13,8 @@ Artifact validation checks the ZIP layout, safe entry paths, required manifest f
 - `GET /artifacts/<name>` - download a `.qcap`
 - `POST /revocations/<issuer>/revocations.json` - publish a signed revocation list
 - `GET /revocations/<issuer>/revocations.json` - download a signed revocation list
+- `GET/POST /admin/tokens` - OIDC-authenticated token listing/creation
+- `DELETE /admin/tokens/<id>` - OIDC-authenticated token revocation
 
 ## Configuration
 
@@ -21,6 +23,7 @@ Artifact validation checks the ZIP layout, safe entry paths, required manifest f
 - `QCAP_REGISTRY_INDEX` - index file path, defaults to `<store>/index.json`
 - `QCAP_REGISTRY_ADDR` - listen address, defaults to `:8080`
 - `QCAP_REGISTRY_TOKEN` - when set, publishing artifacts and revocations requires `Authorization: Bearer <token>`
+- `QCAP_REGISTRY_OIDC_ISSUER`, `QCAP_REGISTRY_OIDC_CLIENT_ID`, `QCAP_REGISTRY_OIDC_ADMIN_SUBJECTS` - enable OIDC administration and scoped PAT writes; all three are required together
 
 Upload limits are 512 MiB per `.qcap`, 10 MiB per revocation document, 10,000 ZIP entries, and 2 GiB total uncompressed archive size.
 
@@ -31,7 +34,7 @@ Upload limits are 512 MiB per `.qcap`, 10 MiB per revocation document, 10,000 ZI
 scripts/seed-registry.sh
 
 # Run registry with publish auth
-QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
+QCAP_REGISTRY_STORE=seed QCAP_REGISTRY_TOKEN=demo-token go -C services/qcap-registry run .
 
 # Publish with the CLI
 cargo run -p qcap-cli -- publish target/qcap-demo/demo.qcap \

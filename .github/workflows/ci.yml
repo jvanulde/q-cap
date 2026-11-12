@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.21"
+          go-version: "1.27.3"
       - run: |
           cd services/qcap-registry
           go build ./...
@@ -43,7 +43,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable 2026-10-09
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.21"
+          go-version: "1.27.3"
       - run: powershell -ExecutionPolicy Bypass -File scripts/demo.ps1
       - run: powershell -ExecutionPolicy Bypass -File scripts/integration-registry.ps1
   deployment:
@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           container_id=$(docker run --detach --publish 18080:8080 --env QCAP_REGISTRY_TOKEN=test-token qcap-registry:test)
           trap 'docker logs "$container_id"; docker rm --force "$container_id"' EXIT
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/health > /tmp/qcap-health.json; then
               grep -q '"status":"ok"' /tmp/qcap-health.json
               exit 0
@@ -79,3 +79,11 @@ jobs:
             --set auth.token=test-token \
             --set image.repository=qcap-registry \
             --set image.tag=test > /tmp/qcap-registry.yaml
+          helm template qcap-registry deploy/helm/qcap-registry \
+            --set auth.oidc.issuer=https://issuer.example \
+            --set auth.oidc.clientID=qcap-admin \
+            --set auth.oidc.adminSubjects=subject-one > /tmp/qcap-registry-oidc.yaml
+          if helm lint deploy/helm/qcap-registry --set auth.oidc.issuer=https://issuer.example; then
+            echo "Partial OIDC configuration must be rejected"
+            exit 1
+          fi
